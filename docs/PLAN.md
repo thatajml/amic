@@ -8,7 +8,7 @@ All numbers below are design budgets or estimates, not measurements.
 | §13 item | Decision |
 |---|---|
 | 1 LLM hosting | **Local Ollama**: tutor = `llama3.1:8b` (Q4). Logprobs are available, but S5 is deferred (see R7) |
-| 1 Tier-2 / judge | Tier 2 = `llama3.2:3b` on Ollama (future work). **Judge = Gemini** (default `gemini-2.5-flash`, configurable) through Gemini's OpenAI-compatible endpoint, used offline only |
+| 1 Tier-2 / judge | Tier 2 = `llama3.2:3b` on Ollama (future work). **Judge = Gemini `gemini-3.5-flash-lite`** (2.5-flash is closed to new users; 3.8-flash measured at ~71 s/call, too slow for ~1 000 judgments) through Gemini's OpenAI-compatible endpoint, used offline only |
 | 2 Corpus | **Synthetic education set (primary, ~70%) + LoCoMo (~30%)** |
 | 3 Timeline | **1 week to the final submission.** Milestones 6–7 are out of scope and become future work in the paper |
 | 4 λ | **4.0** (τ\* = 0.2), a config value, swept in experiments |

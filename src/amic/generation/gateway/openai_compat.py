@@ -1,13 +1,22 @@
-"""OpenAI-compatible adapter. Used for the offline judge (Gemini's OpenAI-compatible endpoint)."""
+"""OpenAI-compatible adapter. Used offline for the judge and dataset generation (Gemini's
+OpenAI-compatible endpoint). Retries only transient failures (429 / 5xx / timeouts)."""
 
 from __future__ import annotations
 
 import os
 import time
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from amic.generation.gateway.base import LLMResult, Message
+
+
+def _transient(e: BaseException) -> bool:
+    import openai
+
+    if isinstance(e, openai.RateLimitError | openai.APITimeoutError | openai.APIConnectionError):
+        return True
+    return isinstance(e, openai.APIStatusError) and e.status_code >= 500
 
 
 class OpenAICompatGateway:
@@ -18,7 +27,9 @@ class OpenAICompatGateway:
         api_key: str | None = None,
         api_key_env: str = "GEMINI_API_KEY",
         temperature: float = 0.0,
-        max_tokens: int = 512,
+        max_tokens: int = 1024,
+        reasoning_effort: str | None = "low",
+        timeout_s: float = 120.0,
     ) -> None:
         from openai import OpenAI
 
@@ -26,11 +37,17 @@ class OpenAICompatGateway:
         if not key:
             raise RuntimeError(f"{api_key_env} is not set (put it in .env)")
         self.model = model
-        self._client = OpenAI(base_url=base_url, api_key=key)
+        self._client = OpenAI(base_url=base_url, api_key=key, timeout=timeout_s, max_retries=0)
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._reasoning = reasoning_effort
 
-    @retry(stop=stop_after_attempt(6), wait=wait_exponential(multiplier=2, max=60), reraise=True)
+    @retry(
+        retry=retry_if_exception(_transient),
+        stop=stop_after_attempt(8),
+        wait=wait_exponential(multiplier=2, min=4, max=90),
+        reraise=True,
+    )
     def chat(
         self,
         messages: list[Message],
@@ -41,14 +58,18 @@ class OpenAICompatGateway:
         json_mode: bool = False,
     ) -> LLMResult:
         t = time.perf_counter()
+        extra: dict[str, object] = {}
+        if self._reasoning:
+            extra["reasoning_effort"] = self._reasoning
         kwargs: dict[str, object] = {}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        r = self._client.chat.completions.create(
+        r = self._client.chat.completions.create(  # type: ignore[call-overload]
             model=self.model,
             messages=messages,  # type: ignore[arg-type]
             max_tokens=max_tokens or self._max_tokens,
             temperature=self._temperature if temperature is None else temperature,
+            extra_body=extra or None,
             **kwargs,  # type: ignore[arg-type]
         )
         wall = (time.perf_counter() - t) * 1000
@@ -59,3 +80,15 @@ class OpenAICompatGateway:
             completion_tokens=usage.completion_tokens if usage else 0,
             total_ms=wall,
         )
+
+
+def judge_from_settings(models: object) -> OpenAICompatGateway:
+    """Build the judge gateway from ModelConfig, loading .env first."""
+    from dotenv import load_dotenv
+
+    load_dotenv(".env")
+    return OpenAICompatGateway(
+        model=models.judge,  # type: ignore[attr-defined]
+        base_url=models.judge_base_url,  # type: ignore[attr-defined]
+        reasoning_effort=models.judge_reasoning,  # type: ignore[attr-defined]
+    )

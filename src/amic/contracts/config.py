@@ -49,7 +49,10 @@ class ModelConfig(BaseModel):
     tutor: str = "llama3.1:8b"
     tier2: str = "llama3.2:3b"
     ollama_base_url: str = "http://localhost:11434"
-    judge: str = "gemini-2.5-flash"
+    # gemini-2.5-flash is closed to new users; 3.8-flash took ~71 s/call (2026-11-18 test);
+    # 3.5-flash-lite answers in 3-7 s and is far stronger than the 8B tutor it judges.
+    judge: str = "gemini-3.5-flash-lite"
+    judge_reasoning: str | None = "low"
     judge_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     temperature: float = 0.0
     seed: int = 0

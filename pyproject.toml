@@ -105,6 +105,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["E501"]   # markdown table rendering
+"src/amic/eval/datasets/edu.py" = ["E501"]   # prompt text kept verbatim (it generated the dataset)
 
 [tool.mypy]
 python_version = "3.11"
