@@ -22,6 +22,7 @@ class GateConfig(BaseModel):
     calibration: Literal["platt", "isotonic"] = "isotonic"
     tier1_artifact: str = "models/tier1.joblib"
     abstain_fallback: Literal["SHALLOW", "DEEP"] = "SHALLOW"
+    use_band: bool = True  # with Tier 2 off: in-band p -> abstain_fallback; False = hard tau
     tier2_max_rate: float = 0.12
     tier2_timeout_ms: float = 800.0
 

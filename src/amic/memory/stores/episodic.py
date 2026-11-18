@@ -127,6 +127,16 @@ class EpisodicStore:
         )
         return list(got["ids"]), arr
 
+    def vectors_and_texts(self, tenant_id: str) -> tuple[list[str], np.ndarray, list[str]]:
+        """Ids, embeddings and documents for one learner (sketch builder input)."""
+        got = self._col(tenant_id).get(
+            where=self._where(tenant_id), include=["embeddings", "documents"]
+        )
+        embs = got["embeddings"]
+        if embs is None or len(embs) == 0:
+            return [], np.zeros((0, 0), dtype=np.float32), []
+        return list(got["ids"]), np.asarray(embs, dtype=np.float32), list(got["documents"] or [])
+
     def delete_tenant(self, tenant_id: str) -> int:
         col = self._col(tenant_id)
         ids = col.get(where=self._where(tenant_id), include=[])["ids"]

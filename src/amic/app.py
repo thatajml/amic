@@ -15,6 +15,7 @@ from amic.generation.prompt import PromptBuilder
 from amic.memory.assembler import ContextAssembler
 from amic.memory.embedder import Embedder
 from amic.memory.retrieval import ChromaRetrievalEngine
+from amic.memory.sketch import EpisodicSketchStore
 from amic.memory.stores.episodic import EpisodicStore, make_chroma_client
 from amic.orchestration.graph import PipelineArm, new_request_id
 from amic.service.session import SessionManager
@@ -34,6 +35,7 @@ class Components:
     telemetry: TelemetryCollector
     writer: MemoryWriter
     planner: RoutePlanner
+    sketches: EpisodicSketchStore
     config_hash: str = ""
     extras: dict[str, Any] = field(default_factory=dict)
 
@@ -71,6 +73,9 @@ def build_components(
         telemetry = SqliteTelemetry(s.metrics_db_url)
 
     episodic = EpisodicStore(chroma_client, s.chroma_collection, s.chroma_mode)
+    sketches = EpisodicSketchStore(episodic)
+    writer = MemoryWriter(embedder, episodic)
+    writer.on_written.append(sketches.invalidate)  # M4 rebuilt lazily after each write
     return Components(
         settings=s,
         embedder=embedder,
@@ -81,8 +86,9 @@ def build_components(
         llm=llm,
         sessions=SessionManager(redis, s.m0_turns),
         telemetry=telemetry,
-        writer=MemoryWriter(embedder, episodic),
+        writer=writer,
         planner=RoutePlanner(s.routes),
+        sketches=sketches,
         config_hash=s.config_hash(),
     )
 
