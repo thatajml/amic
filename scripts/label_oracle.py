@@ -4,11 +4,13 @@
     python scripts/label_oracle.py judge      # Gemini scores the 3 answers per probe
     python scripts/label_oracle.py label      # -> data/edu/labels.parquet (+ summary)
 
-Label rule: memory-required iff  max(score_SHALLOW, score_DEEP) - score_SKIP >= MARGIN (1.0).
+Label rule (primary, "necessity"): memory-required iff
+    max(needs_met_SHALLOW, needs_met_DEEP) - needs_met_SKIP >= MARGIN (1.0)
+`needs_met` explicitly does NOT penalise a correct generic reply to a self-contained question.
+Rubric v1 labelled on `overall`, which the judge inflated for personalisation (general
+questions: +2.0 "personal", +0.0 "correct"); that variant is kept as `label_personal`.
 Depth (required only): SHALLOW iff score_SHALLOW >= score_DEEP - 0.5 (cheapest sufficient route).
-Each probe is judged twice with different answer orders; scores are averaged (single 1-5
-judgments are too noisy for a 1-point margin). `label_strict` (sensitivity analysis): required
-iff helpfulness drops by >= 1 without memory, or the SKIP answer fabricates history.
+Each probe is judged twice with different answer orders; scores are averaged.
 Generation runs against FROZEN seeded memory: long-term writes are dropped (Day-2 finding).
 """
 
@@ -114,12 +116,17 @@ Score EACH reply independently on a 1-5 scale:
 - "personal": it uses the student's real history/goals where the message depends on them
   (3 = history not needed and reply is fine; lower if it ignores history the message depends
   on; higher if well tailored).
+- "needs_met": how completely the reply meets what this student actually needs right now.
+  If the message is self-contained (answerable without knowing this student), a correct, clear
+  generic reply scores 5: do NOT lower it for missing personalisation. Lower it only when the
+  reply misses or misreads something that depends on the student's history or today's
+  conversation, or states false things about the student's past.
 - "fabricated": true if the reply asserts anything about the student's past (earlier mistakes,
   projects, what was discussed) that is NOT supported by the history or current session.
 - "overall": overall quality of the reply for THIS student. A fabricated claim about the
   student's past must lower "overall" by at least 2.
 Judge content, not length or style. Return JSON only:
-{{"A": {{"correct": n, "helpful": n, "personal": n, "fabricated": bool, "overall": n}}, "B": {{...}}, "C": {{...}}}}"""
+{{"A": {{"correct": n, "helpful": n, "personal": n, "needs_met": n, "fabricated": bool, "overall": n}}, "B": {{...}}, "C": {{...}}}}"""
 
 
 def _judge_prompt(lr: edu.Learner, p: edu.Probe, answers: dict[str, str], perm: list[str]) -> str:
@@ -195,7 +202,7 @@ def judge(workers: int, repeat_frac: float) -> None:
 
 
 def _clean(d: dict) -> dict:
-    out = {k: float(d[k]) for k in ("correct", "helpful", "personal", "overall")}
+    out = {k: float(d[k]) for k in ("correct", "helpful", "personal", "needs_met", "overall")}
     if not all(1 <= v <= 5 for v in out.values()):
         raise ValueError("score out of range")
     fab = d["fabricated"]
@@ -209,12 +216,6 @@ def decide_label(s_skip: float, s_shallow: float, s_deep: float) -> tuple[bool, 
     if not required:
         return False, None
     return True, ("SHALLOW" if s_shallow >= s_deep - 0.5 else "DEEP")
-
-
-def decide_strict(
-    help_skip: float, help_mem: float, fab_skip: float, s_skip: float, s_mem: float
-) -> bool:
-    return help_mem - help_skip >= MARGIN or (fab_skip >= 0.5 and s_mem > s_skip)
 
 
 def split_of(learner_ids: list[str], seed: int = 13) -> dict[str, str]:
@@ -250,15 +251,16 @@ def label() -> None:
             for route in ("SKIP", "SHALLOW", "DEEP")
         }
         req, depth = decide_label(
-            mean["SKIP"]["overall"], mean["SHALLOW"]["overall"], mean["DEEP"]["overall"]
+            mean["SKIP"]["needs_met"], mean["SHALLOW"]["needs_met"], mean["DEEP"]["needs_met"]
         )
-        best = "SHALLOW" if mean["SHALLOW"]["overall"] >= mean["DEEP"]["overall"] else "DEEP"
-        strict = decide_strict(
-            mean["SKIP"]["helpful"],
-            max(mean["SHALLOW"]["helpful"], mean["DEEP"]["helpful"]),
-            mean["SKIP"]["fabricated"],
-            mean["SKIP"]["overall"],
-            mean[best]["overall"],
+        if req and depth is not None:  # depth: cheapest route that is not worse overall
+            depth = (
+                "SHALLOW"
+                if mean["SHALLOW"]["needs_met"] >= mean["DEEP"]["needs_met"] - 0.5
+                else "DEEP"
+            )
+        personal, _ = decide_label(
+            mean["SKIP"]["overall"], mean["SHALLOW"]["overall"], mean["DEEP"]["overall"]
         )
         if len(js) > 1:
             ls = [
@@ -275,13 +277,14 @@ def label() -> None:
             "query": p.query,
             "has_m0": bool(p.m0_context),
             "label_required": req,
-            "label_strict": strict,
+            "label_personal": personal,
             "depth": depth,
             "n_judgments": len(js),
         }
         for route in ("SKIP", "SHALLOW", "DEEP"):
             k = route.lower()
-            row[f"score_{k}"] = mean[route]["overall"]
+            row[f"score_{k}"] = mean[route]["needs_met"]
+            row[f"overall_{k}"] = mean[route]["overall"]
             row[f"fab_{k}"] = mean[route]["fabricated"]
             t = gen_tok.get((pid, route), {})
             row[f"prompt_tokens_{k}"] = t.get("prompt_tokens")
@@ -291,10 +294,10 @@ def label() -> None:
     df.to_parquet(LABELS, index=False)
     print(f"{len(df)} labelled probes -> {LABELS}")
     print(
-        f"memory-required: {df.label_required.mean():.1%}  (strict: {df.label_strict.mean():.1%})   depth: {df.depth.value_counts().to_dict()}"
+        f"memory-required: {df.label_required.mean():.1%}  (personalisation-inclusive: {df.label_personal.mean():.1%})   depth: {df.depth.value_counts().to_dict()}"
     )
     print("\nrequired-rate by category (intended need in brackets):")
-    g = df.groupby(["category", "intended_memory"])[["label_required", "label_strict"]].mean()
+    g = df.groupby(["category", "intended_memory"])[["label_required", "label_personal"]].mean()
     g["n"] = df.groupby(["category", "intended_memory"]).size()
     print(g.to_string(float_format=lambda x: f"{x:.2f}"))
     print(

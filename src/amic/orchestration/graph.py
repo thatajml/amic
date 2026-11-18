@@ -122,7 +122,12 @@ class PipelineArm:
         return {
             "llm": res,
             "answer": res.text.strip(),
-            "lat": {**state.get("lat", {}), "generation": _ms(t)},
+            "lat": {
+                **state.get("lat", {}),
+                "generation": _ms(t),
+                "prefill": res.prefill_ms,
+                "decode": res.decode_ms,
+            },
         }
 
     def _record_node(self, state: RunState) -> dict[str, Any]:

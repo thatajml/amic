@@ -93,12 +93,6 @@ def test_decide_label(scores, expected):
     assert label_oracle.decide_label(*scores) == expected
 
 
-def test_strict_label():
-    assert label_oracle.decide_strict(3, 4, 0, 4, 4)  # helpfulness drop
-    assert label_oracle.decide_strict(4, 4, 1, 3, 4)  # fabrication without memory
-    assert not label_oracle.decide_strict(4, 4.5, 0, 4, 5)
-
-
 def test_split_by_learner_is_disjoint_and_stable():
     ids = [f"edu-{i:03d}" for i in range(40)]
     s = label_oracle.split_of(ids)

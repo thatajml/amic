@@ -71,6 +71,7 @@ eval = [
     "matplotlib>=3.9",
     "datasets>=3.1",          # LoCoMo / LongMemEval loading
     "tqdm>=4.66",
+    "tabulate>=0.9",          # pandas.to_markdown for the results tables
 ]
 dev = [
     "pytest>=8.3",
@@ -109,6 +110,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 "src/amic/control/signals/bus.py" = ["E501"]   # regex lexicons
 "src/amic/memory/sketch.py" = ["E501"]
 "tests/*" = ["E501"]
+"src/amic/eval/report.py" = ["E501"]   # prose inside tables
 
 [tool.mypy]
 python_version = "3.11"

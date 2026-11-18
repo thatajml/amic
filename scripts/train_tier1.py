@@ -40,7 +40,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--kind", choices=["logreg", "lgbm"], default="logreg")
     ap.add_argument("--calibration", choices=["isotonic", "platt"], default="isotonic")
-    ap.add_argument("--label", default="label_required", choices=["label_required", "label_strict"])
+    ap.add_argument(
+        "--label", default="label_required", choices=["label_required", "label_personal"]
+    )
     ap.add_argument("--no-s3", action="store_true")
     ap.add_argument("--all-rows", action="store_true", help="train on Tier-0-resolved rows too")
     ap.add_argument("--name", default=None)
@@ -49,7 +51,7 @@ def main() -> None:
     feats = [f for f in FEATURES if not (a.no_s3 and f in S3_FEATURES and f != "s3_has_memory")]
     name = a.name or "tier1" + ("_no_s3" if a.no_s3 else "") + (
         "" if a.kind == "logreg" else f"_{a.kind}"
-    ) + ("" if a.label == "label_required" else "_strict")
+    ) + ("" if a.label == "label_required" else "_personal")
     df = load_dataset("edu")
     if not a.all_rows:
         df = df[df.tier0_rule == "abstain"]

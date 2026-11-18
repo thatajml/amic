@@ -110,7 +110,9 @@ class LatencySplit(BaseModel):
     tier1: float = 0.0
     tier2: float = 0.0
     retrieval: float = 0.0
-    generation: float = 0.0
+    generation: float = 0.0  # wall time of the LLM call
+    prefill: float = 0.0  # of which: prompt processing (provider-reported; 0 if unknown)
+    decode: float = 0.0  # of which: token generation
     verify: float = 0.0
     total: float = 0.0
 
