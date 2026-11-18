@@ -7,7 +7,7 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
 
   chroma:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:1.5.9
     ports: ["8000:8000"]
     volumes: [chroma-data:/data]
     environment:

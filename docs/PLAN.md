@@ -13,6 +13,7 @@ All numbers below are design budgets or estimates, not measurements.
 | 3 Timeline | **1 week to the final submission.** Milestones 6–7 are out of scope and become future work in the paper |
 | 4 λ | **4.0** (τ\* = 0.2), a config value, swept in experiments |
 | 5 Metrics store | **SQLite** (SQLAlchemy) + Parquet export for analysis |
+| Vector store | **Chroma embedded** (`PersistentClient`, in-process). The Docker server adds a ~44 ms/query transport stall on Windows (Day-1 probe) |
 | 6 Repo shape | **One repo, one Python package, one sub-package per layer** |
 
 ## 1. Sprint scope
@@ -229,6 +230,8 @@ class Settings(BaseSettings):
     routes: RouteConfig = RouteConfig()
     models: ModelConfig = ModelConfig()
     redis_url: str = "redis://localhost:6379/0"
+    chroma_client: Literal["embedded", "http"] = "embedded"
+    chroma_path: str = "data/chroma"
     chroma_host: str = "localhost"; chroma_port: int = 8000
     chroma_mode: Literal["single", "per_tenant"] = "single"
     metrics_db_url: str = "sqlite:///./data/metrics.db"

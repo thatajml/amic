@@ -9,11 +9,11 @@ the LLM runs locally (open decision §13.1).
 |---|---|---|---|
 | Python | 3.11 – 3.13 | **Yes** | Runtime (`requires-python = ">=3.11,<3.14"`) |
 | Git | 2.40+ | **Yes** | Source control |
-| Docker Desktop (with Compose v2) | 24+ | **Yes** | Runs Redis and ChromaDB locally (Redis has no native Windows build) |
+| Docker Desktop (with Compose v2) | 24+ | **Yes** | Runs Redis locally (no native Windows build); optional Chroma server |
 | GitHub CLI (`gh`) | 2.x | Recommended | Repo, PR and CI operations |
 | uv | 0.5+ | Recommended | Fast installs and a reproducible lock file (`uv.lock`); plain `pip` also works |
 | NVIDIA driver + CUDA 12.x runtime | recent | Only for a local LLM / GPU embeddings | RTX-class GPU; PyTorch wheels bundle the CUDA libraries |
-| Ollama | latest | Only if §13.1 = local | Serves Llama 3 (8B Q4 fits in 8 GB VRAM) plus the small Tier-2 / judge model |
+| Ollama | 0.40+ | **Yes** (decided: local) | Serves Llama 3 (8B Q4 fits in 8 GB VRAM) plus the small Tier-2 / judge model |
 | MSVC Build Tools (C++) | 2022 | Fallback only | Needed only if a wheel such as `chroma-hnswlib` has to compile from source on Windows |
 
 ## 2. Infrastructure services (docker-compose)
@@ -21,7 +21,7 @@ the LLM runs locally (open decision §13.1).
 | Service | Image | Port |
 |---|---|---|
 | Redis | `redis:7-alpine` | 6379 |
-| ChromaDB | `chromadb/chroma` | 8000 |
+| ChromaDB (optional; default is embedded in-process) | `chromadb/chroma:1.5.9` | 8000 |
 
 The metrics store defaults to SQLite (one file, no service) until §13.5 is decided.
 

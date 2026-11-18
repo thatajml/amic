@@ -1,0 +1,8 @@
+# Base experiment config. Ablations override only what they change.
+arm: amic
+gate:
+  lam: 4.0
+  tau_mode: cost
+ablation:
+  tiers: t0_t1
+  use_sketch_probe: true
