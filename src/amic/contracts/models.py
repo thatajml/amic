@@ -59,6 +59,7 @@ class RequestContext(BaseModel):
     q_vec: list[float] | None = None  # filled ONCE by the signal bus (P2)
     oracle_label: bool | None = None  # experiments only, read by the oracle arm
     oracle_depth: Route | None = None  # experiments only: SHALLOW or DEEP
+    now: datetime | None = None  # simulated clock for seeding/experiments; None = wall clock
 
 
 class RetrievalPlan(BaseModel):

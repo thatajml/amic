@@ -257,6 +257,14 @@ Each day ends with the system runnable and the tests green. **DoD** = definition
 - *DoD tests:* `test_tenant_isolation` (tenant A never retrieves B's items); `test_m0_visibility` (turn N content is in the turn N+1 prompt through M0, with no long-term store involved); `test_never_no_chroma` (the never arm makes zero Chroma calls, using a spy); `test_trace_recorded` (one trace per request, all fields populated). Integration tests run against fakeredis + an ephemeral Chroma client.
 - **T2.5** `.github/workflows/ci.yml`: ruff + pytest (unit + integration, no Ollama).
 
+**Day-2 findings that constrain the runner (2026-11-18 smoke run):**
+- Evaluation queries run against a **frozen, seeded memory with long-term writes disabled**
+  (`answer_deferred`, job dropped). Otherwise one arm's answers, including hallucinated ones,
+  leak into the memory another arm retrieves from.
+- **Warm up the model** before timing anything (first call ~8 s, including the model load).
+- The `never` arm **fabricates past interactions** despite the system prompt. The judge rubric must
+  penalise invented history, and this is the paper's motivating failure example for a wrong SKIP.
+
 ### Day 3: Dataset + oracle labels
 - **T3.1** `scripts/gen_edu_dataset.py`: synthetic learners (~40), each with 3–5 prior sessions over an **intro Python** curriculum (variables, types, conditionals, loops, functions, lists/dicts, strings, file I/O, exceptions), seeded misconceptions, preferences and goals. Then a probe-query set per learner, mixed by design: general concept questions (should SKIP), questions referring back to earlier sessions (memory-needed), and personalisation-sensitive questions. Seed the histories into memory through the normal write path.
 - **T3.2** `eval/datasets/locomo.py` loader; map the adversarial / unanswerable category to "memory-not-required".
