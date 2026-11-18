@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.benchmarks/
+
+# Secrets / local config
+.env
+.claude/settings.local.json
+
+# Data, models, artefacts
+data/
+chroma_data/
+*.db
+*.parquet
+models/
+runs/
+mlruns/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

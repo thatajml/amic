@@ -1,0 +1,107 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amic"
+version = "0.0.1"
+description = "AMIC - Adaptive Memory Invocation Controller: cascaded cost-sensitive memory gating for LLM tutoring agents"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Proprietary - MIT-WPU capstone SP8" }
+
+# Core runtime: needed by every layer / the hot request path.
+dependencies = [
+    # L2 service + shared contracts (frozen interfaces, section 8)
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    # L3 orchestration
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    # L4/L5 numerics + embeddings (q_vec computed once, P2)
+    "numpy>=1.26",
+    "sentence-transformers>=3.2",
+    # L5 vector store
+    "chromadb>=0.5.20",
+    # L2/L7 session state + WriteIntent stream
+    "redis>=5.2",
+    # L8 telemetry / metrics store (SQLite via SQLAlchemy; Parquet export)
+    "sqlalchemy>=2.0",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    # cross-cutting
+    "structlog>=24.4",
+    "tenacity>=9.0",
+    "orjson>=3.10",
+]
+
+[project.optional-dependencies]
+# L4 Tier-1 calibrated gate (LR / GBDT + Platt/isotonic)
+gate = [
+    "scikit-learn>=1.5",
+    "lightgbm>=4.5",
+    "joblib>=1.4",
+]
+# LLMGateway adapters - pick one per open decision 13.1 (both may be installed)
+llm-local = [
+    "ollama>=0.4",            # local Llama 3 via Ollama; logprobs => S5 signal
+    "langchain-ollama>=0.2",
+]
+llm-hosted = [
+    "openai>=1.54",           # any OpenAI-compatible endpoint (incl. vLLM, Groq, Together)
+    "langchain-openai>=0.2",
+]
+# Local HF models / cross-encoder rerank on GPU (install torch per docs/LOCAL_BUILD.md first)
+ml = [
+    "torch>=2.5",
+    "transformers>=4.46",
+    "accelerate>=1.1",
+]
+# L1 UI + L8 evaluation
+ui = [
+    "streamlit>=1.40",
+    "plotly>=5.24",
+]
+eval = [
+    "scipy>=1.14",
+    "matplotlib>=3.9",
+    "datasets>=3.1",          # LoCoMo / LongMemEval loading
+    "tqdm>=4.66",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "pytest-benchmark>=5.1",  # Tier-0 ~0.1 ms / Tier-0+1 <= 5 ms budgets
+    "pytest-timeout>=2.3",
+    "hypothesis>=6.115",
+    "fakeredis>=2.26",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+]
+all = ["amic[gate,llm-local,llm-hosted,ml,ui,eval,dev]"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/amic"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
