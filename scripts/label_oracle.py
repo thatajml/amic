@@ -176,6 +176,8 @@ def judge(workers: int, repeat_frac: float) -> None:
             res = llm.chat([{"role": "user", "content": prompt}], json_mode=True, max_tokens=1500)
             try:
                 raw = json.loads(res.text)
+                if isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], dict):
+                    raw = raw[0]  # the judge occasionally wraps its object in a list
                 scores = {
                     route: _clean(raw[letter]) for letter, route in zip("ABC", perm, strict=True)
                 }
