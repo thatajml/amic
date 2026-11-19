@@ -13,8 +13,10 @@ import argparse
 import json
 import random
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from collections.abc import Callable
 from pathlib import Path
+from typing import TextIO
 
 from amic.contracts.config import Settings
 from amic.eval.datasets import edu
@@ -64,13 +66,19 @@ def main() -> None:
     ap.add_argument("--runs", nargs="+", required=True)
     ap.add_argument("--baseline", default="always")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--wait-for-quota", action="store_true", help="sleep through daily-cap resets")
     a = ap.parse_args()
+    from amic.eval.quota import run_with_quota
 
     llm = judge_from_settings(Settings().models)
     learners = {lr.learner_id: lr for lr in edu.load_learners()}
     probes = {p.probe_id: p for p in edu.load_probes()}
     base = load_answers(a.baseline)
 
+    jobs: list[tuple[str, tuple[str, int]]] = []
+    judges: dict[str, Callable[[tuple[str, int]], dict]] = {}
+    sinks: dict[str, Callable[[dict], None]] = {}
+    files: list[TextIO] = []
     for run in a.runs:
         mine = load_answers(run)
         out_path = Path("runs") / run / f"pairwise_vs_{a.baseline}.jsonl"
@@ -139,16 +147,36 @@ def main() -> None:
                 "fab_base": fb if run_is_a else fa,
             }
 
-        with out_path.open("a", encoding="utf-8") as f, ThreadPoolExecutor(a.workers) as ex:
-            futs = [ex.submit(judge_one, k) for k in keys]
-            for i, fut in enumerate(as_completed(futs), 1):
-                try:
-                    f.write(json.dumps(fut.result()) + "\n")
-                    f.flush()
-                except Exception as e:  # noqa: BLE001
-                    print("FAIL", e)
-                if i % 50 == 0:
-                    print(f"  {i}/{len(keys)}", flush=True)
+        f = out_path.open("a", encoding="utf-8")
+        files.append(f)
+        judges[run] = judge_one
+
+        def sink(row: dict, f: TextIO = f) -> None:
+            f.write(json.dumps(row) + "\n")
+            f.flush()
+
+        sinks[run] = sink
+        jobs += [(run, k) for k in keys]
+
+    # priority under a daily cap: seed 1 for every run first (a complete one-seed table),
+    # then seed 2, then seed 3
+    order = {r: i for i, r in enumerate(a.runs)}
+    jobs.sort(key=lambda j: (j[1][1], order[j[0]], j[1][0]))
+    lock = threading.Lock()
+
+    def do(job: tuple[str, tuple[str, int]]) -> tuple[str, dict]:
+        run, k = job
+        return run, judges[run](k)
+
+    def write(res: tuple[str, dict]) -> None:
+        with lock:
+            sinks[res[0]](res[1])
+
+    try:
+        run_with_quota(jobs, do, write, workers=a.workers, wait=a.wait_for_quota, label="pairwise")
+    finally:
+        for fh in files:
+            fh.close()
 
 
 if __name__ == "__main__":

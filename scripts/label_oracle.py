@@ -23,7 +23,6 @@ import sys
 import threading
 import uuid
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from amic.contracts.config import Settings
@@ -145,7 +144,8 @@ def _judge_prompt(lr: edu.Learner, p: edu.Probe, answers: dict[str, str], perm: 
     )
 
 
-def judge(workers: int, repeat_frac: float) -> None:
+def judge(workers: int, repeat_frac: float, reps: list[int], wait: bool) -> None:
+    from amic.eval.quota import run_with_quota
     from amic.generation.gateway.openai_compat import judge_from_settings
 
     llm = judge_from_settings(Settings().models)
@@ -158,13 +158,17 @@ def judge(workers: int, repeat_frac: float) -> None:
             gens[r["probe_id"]][r["route"]] = r["answer"]
     done = _done_keys(JUDG, lambda r: f"{r['probe_id']}|{r['rep']}")
     rng = random.Random(42)
-    jobs = []
+    planned: list[tuple[str, int]] = []
     for pid in sorted(gens):
         if len(gens[pid]) < 3:
             continue
-        reps = [0] + ([1] if rng.random() < repeat_frac else [])
-        jobs += [(pid, rep) for rep in reps if f"{pid}|{rep}" not in done]
-    print(f"{len(jobs)} judgments to run ({len(done)} done)")
+        planned += [(pid, 0)] + ([(pid, 1)] if rng.random() < repeat_frac else [])
+    # priority order under a daily cap: every probe's FIRST judgment before any second one
+    jobs = sorted(
+        (j for j in planned if j[1] in reps and f"{j[0]}|{j[1]}" not in done),
+        key=lambda j: (j[1], j[0]),
+    )
+    print(f"{len(jobs)} judgments to run ({len(done)} done)", flush=True)
     lock = threading.Lock()
 
     def run(pid: str, rep: int) -> dict:
@@ -186,21 +190,16 @@ def judge(workers: int, repeat_frac: float) -> None:
                 last = e
         raise RuntimeError(f"{pid}: unparseable judge output: {last}")
 
-    n = 0
-    with JUDG.open("a", encoding="utf-8") as out, ThreadPoolExecutor(workers) as ex:
-        futs = [ex.submit(run, pid, rep) for pid, rep in jobs]
-        for fut in as_completed(futs):
-            try:
-                row = fut.result()
-            except Exception as e:  # noqa: BLE001
-                print("FAIL", e)
-                continue
+    with JUDG.open("a", encoding="utf-8") as out:
+
+        def sink(row: dict) -> None:
             with lock:
                 out.write(json.dumps(row) + "\n")
                 out.flush()
-                n += 1
-                if n % 25 == 0 or n == len(jobs):
-                    print(f"  {n}/{len(jobs)}", flush=True)
+
+        run_with_quota(
+            jobs, lambda j: run(*j), sink, workers=workers, wait=wait, label="label-judge"
+        )
 
 
 def _clean(d: dict) -> dict:
@@ -220,12 +219,7 @@ def decide_label(s_skip: float, s_shallow: float, s_deep: float) -> tuple[bool, 
     return True, ("SHALLOW" if s_shallow >= s_deep - 0.5 else "DEEP")
 
 
-def split_of(learner_ids: list[str], seed: int = 13) -> dict[str, str]:
-    ids = sorted(learner_ids)
-    random.Random(seed).shuffle(ids)
-    n = len(ids)
-    a, b = int(0.6 * n), int(0.8 * n)
-    return {i: ("train" if k < a else "val" if k < b else "test") for k, i in enumerate(ids)}
+split_of = edu.split_of  # moved to the dataset module (the runner needs it without labels)
 
 
 def label() -> None:
@@ -320,11 +314,13 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--repeat-frac", type=float, default=1.0, help="share judged twice (mean used)")
+    ap.add_argument("--reps", default="0,1", help="which judgments to run now, e.g. '0' first")
+    ap.add_argument("--wait-for-quota", action="store_true", help="sleep through daily-cap resets")
     a = ap.parse_args()
     if a.stage == "generate":
         generate(a.collection, a.limit)
     elif a.stage == "judge":
-        judge(a.workers, a.repeat_frac)
+        judge(a.workers, a.repeat_frac, [int(x) for x in a.reps.split(",")], a.wait_for_quota)
     else:
         label()
 

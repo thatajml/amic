@@ -35,6 +35,23 @@ def _m0(p: edu.Probe) -> list[Turn]:
     return [Turn(role=role.get(t.role, "user"), text=t.text, ts=p.ts) for t in p.m0_context]  # type: ignore[arg-type]
 
 
+def _round_robin(probes: list[edu.Probe]) -> list[edu.Probe]:
+    """Interleave learners so consecutive requests never share a memory-block prefix.
+
+    Ollama keeps the previous prompt's KV cache; back-to-back queries from one learner that
+    retrieve the same memory would get their memory-block prefill almost free, understating
+    what retrieval costs. Real multi-user traffic does not line up like that.
+    """
+    by: dict[str, list[edu.Probe]] = {}
+    for p in probes:
+        by.setdefault(p.learner_id, []).append(p)
+    queues = [by[k] for k in sorted(by)]
+    out: list[edu.Probe] = []
+    for i in range(max((len(q) for q in queues), default=0)):
+        out += [q[i] for q in queues if i < len(q)]
+    return out
+
+
 def run(
     arm_name: str,
     run_name: str,
@@ -49,9 +66,14 @@ def run(
     from amic.arms.amic import AmicArm
     from amic.control.tier1 import Tier1Model
 
-    labels = pd.read_parquet(edu.DATA_DIR / "labels.parquet").set_index("probe_id")
-    probes = [p for p in edu.load_probes() if p.probe_id in labels.index]
-    probes = [p for p in probes if labels.loc[p.probe_id, "split"] == split][:limit]
+    # labels are needed only by the oracle arm; the split is by learner and label-independent
+    lab_path = edu.DATA_DIR / "labels.parquet"
+    labels = pd.read_parquet(lab_path).set_index("probe_id") if lab_path.exists() else None
+    if arm_name == "oracle" and labels is None:
+        raise SystemExit("the oracle arm needs data/edu/labels.parquet (run label_oracle.py label)")
+    all_probes = edu.load_probes()
+    splits = edu.split_of(list({p.learner_id for p in all_probes}))
+    probes = _round_robin([p for p in all_probes if splits[p.learner_id] == split])[:limit]
     out_dir = Path("runs") / run_name
     out_dir.mkdir(parents=True, exist_ok=True)
     answers = out_dir / "answers.jsonl"
@@ -94,7 +116,11 @@ def run(
             todo = [p for p in probes if (p.probe_id, seed) not in done]
             print(f"[{run_name}] seed={seed}: {len(todo)} probes", flush=True)
             for i, p in enumerate(todo, 1):
-                lab = labels.loc[p.probe_id]
+                lab = (
+                    labels.loc[p.probe_id]
+                    if labels is not None and p.probe_id in labels.index
+                    else None
+                )
                 ctx = RequestContext(
                     request_id=f"{run_name}-s{seed}-{p.probe_id}",
                     tenant_id=p.learner_id,
@@ -103,8 +129,10 @@ def run(
                     m0_turns=_m0(p),
                     arm=arm_name,  # type: ignore[arg-type]
                     now=p.ts,
-                    oracle_label=bool(lab.label_required),
-                    oracle_depth=Route(lab.depth) if isinstance(lab.depth, str) else None,
+                    oracle_label=bool(lab.label_required) if lab is not None else None,
+                    oracle_depth=(
+                        Route(lab.depth) if lab is not None and isinstance(lab.depth, str) else None
+                    ),
                 )
                 resp, _drop_write = arm.answer_deferred(ctx)
                 fout.write(

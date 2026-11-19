@@ -4,16 +4,52 @@ OpenAI-compatible endpoint). Retries only transient failures (429 / 5xx / timeou
 from __future__ import annotations
 
 import os
+import re
 import time
+from datetime import UTC, datetime, timedelta
 
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from amic.generation.gateway.base import LLMResult, Message
 
 
+class DailyQuotaExceeded(RuntimeError):
+    """The provider's per-DAY request cap is spent. Not retried: waiting minutes cannot help."""
+
+    def __init__(self, message: str, retry_after_s: float) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
+
+
+_RETRY_IN = re.compile(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", re.I)
+
+
+def daily_quota_retry_after(e: BaseException) -> float | None:
+    """Seconds until the daily quota resets if `e` is a per-day 429, else None."""
+    import openai
+
+    if not isinstance(e, openai.RateLimitError):
+        return None
+    msg = str(e)
+    if "per day" not in msg.lower() and "perday" not in msg.lower():
+        return None  # per-minute limit: transient, let tenacity back off
+    m = _RETRY_IN.search(msg)
+    if m and any(m.groups()):
+        h, mi, se = (float(x) if x else 0.0 for x in m.groups())
+        return h * 3600 + mi * 60 + se
+    # fallback: next midnight US-Pacific (Gemini's reset), ~08:00 UTC in winter
+    now = datetime.now(UTC)
+    reset = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if reset <= now:
+        reset += timedelta(days=1)
+    return (reset - now).total_seconds()
+
+
 def _transient(e: BaseException) -> bool:
     import openai
 
+    if daily_quota_retry_after(e) is not None:
+        return False
     if isinstance(e, openai.RateLimitError | openai.APITimeoutError | openai.APIConnectionError):
         return True
     return isinstance(e, openai.APIStatusError) and e.status_code >= 500
@@ -64,14 +100,20 @@ class OpenAICompatGateway:
         kwargs: dict[str, object] = {}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        r = self._client.chat.completions.create(  # type: ignore[call-overload]
-            model=self.model,
-            messages=messages,  # type: ignore[arg-type]
-            max_tokens=max_tokens or self._max_tokens,
-            temperature=self._temperature if temperature is None else temperature,
-            extra_body=extra or None,
-            **kwargs,  # type: ignore[arg-type]
-        )
+        try:
+            r = self._client.chat.completions.create(  # type: ignore[call-overload]
+                model=self.model,
+                messages=messages,  # type: ignore[arg-type]
+                max_tokens=max_tokens or self._max_tokens,
+                temperature=self._temperature if temperature is None else temperature,
+                extra_body=extra or None,
+                **kwargs,  # type: ignore[arg-type]
+            )
+        except Exception as e:
+            wait = daily_quota_retry_after(e)
+            if wait is not None:
+                raise DailyQuotaExceeded(f"{self.model}: daily quota exhausted", wait) from e
+            raise
         wall = (time.perf_counter() - t) * 1000
         usage = r.usage
         return LLMResult(
