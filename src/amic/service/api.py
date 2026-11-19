@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from amic.app import Components, build_arm, build_components, make_context
+from amic.app import Components, UnknownModelError, build_arm, build_components, make_context
 from amic.contracts.models import AgentResponse, DecisionTrace
 from amic.orchestration.graph import PipelineArm
 
@@ -19,6 +19,7 @@ class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1)
     query: str = Field(min_length=1, max_length=4000)
     arm: Literal["always", "never", "amic"] | None = None  # oracle needs labels: not exposed
+    model: str | None = None  # tutor model; must be listed by GET /health. None = default
 
 
 def create_app(comps: Components | None = None) -> FastAPI:
@@ -42,9 +43,15 @@ def create_app(comps: Components | None = None) -> FastAPI:
         return arms[name]
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    def health() -> dict[str, object]:
         c = _comps()
-        return {"status": "ok", "config_hash": c.config_hash, "default_arm": c.settings.arm}
+        return {
+            "status": "ok",
+            "config_hash": c.config_hash,
+            "default_arm": c.settings.arm,
+            "models": c.available_models(),
+            "shadow_baseline": c.settings.telemetry.shadow_baseline,
+        }
 
     @app.post("/chat", response_model=AgentResponse)
     def chat(req: ChatRequest, bg: BackgroundTasks) -> AgentResponse:
@@ -54,7 +61,11 @@ def create_app(comps: Components | None = None) -> FastAPI:
             arm = _arm(arm_name)
         except (ImportError, KeyError) as e:
             raise HTTPException(400, f"arm '{arm_name}' unavailable: {e}") from e
-        ctx = make_context(c, req.tenant_id, req.session_id, req.query, arm_name)  # type: ignore[arg-type]
+        try:
+            c.llm_for(req.model)  # validate before touching the session
+        except UnknownModelError as e:
+            raise HTTPException(400, str(e)) from e
+        ctx = make_context(c, req.tenant_id, req.session_id, req.query, arm_name, model=req.model)  # type: ignore[arg-type]
         resp, write_job = arm.answer_deferred(ctx)
         bg.add_task(write_job)  # after the response is sent (P5)
         return resp

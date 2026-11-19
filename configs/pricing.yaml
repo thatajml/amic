@@ -1,0 +1,18 @@
+# Token prices for the usage dashboard, in USD per 1M tokens. They are applied when the dashboard
+# reads the traces (amic.telemetry.usage), never stored on traces, so changing them re-prices
+# history instead of rewriting it. The dashboard sidebar can override them for a session.
+#
+# Local Ollama models have no per-token bill. The values below are PLACEHOLDERS standing in for
+# "this model served by a hosted provider": they are not quotes. Replace them with your
+# provider's current rates and set `placeholder: false`. While `placeholder: true`, the dashboard
+# labels every dollar figure as illustrative.
+currency: USD
+models:
+  llama3.1:8b:
+    input_per_mtok: 0.10
+    output_per_mtok: 0.10
+    placeholder: true
+  llama3.2:3b:
+    input_per_mtok: 0.05
+    output_per_mtok: 0.05
+    placeholder: true

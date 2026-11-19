@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -38,6 +39,28 @@ class Components:
     sketches: EpisodicSketchStore
     config_hash: str = ""
     extras: dict[str, Any] = field(default_factory=dict)
+    # Builds a gateway for another tutor model (per-request `model`). None = default model only.
+    llm_factory: Callable[[str], LLMGateway] | None = None
+
+    def available_models(self) -> list[str]:
+        return list(dict.fromkeys([self.llm.model, *self.settings.models.available]))
+
+    def llm_for(self, model: str | None) -> LLMGateway:
+        """The gateway for `model` (None = the default tutor). Gateways are built once, lazily."""
+        if model is None or model == self.llm.model:
+            return self.llm
+        if model not in self.settings.models.available or self.llm_factory is None:
+            raise UnknownModelError(model, self.available_models())
+        pool: dict[str, LLMGateway] = self.extras.setdefault("llm_pool", {})
+        if model not in pool:
+            pool[model] = self.llm_factory(model)
+        return pool[model]
+
+
+class UnknownModelError(ValueError):
+    def __init__(self, model: str, available: list[str]) -> None:
+        super().__init__(f"model '{model}' is not available; choose one of {available}")
+        self.model = model
 
 
 def build_components(
@@ -45,6 +68,7 @@ def build_components(
     *,
     embedder: Embedder | None = None,
     llm: LLMGateway | None = None,
+    llm_factory: Callable[[str], LLMGateway] | None = None,
     redis: Any = None,
     chroma_client: Any = None,
     telemetry: TelemetryCollector | None = None,
@@ -55,10 +79,17 @@ def build_components(
 
         embedder = STEmbedder(s.models.embedding, s.models.embedding_device)
     if llm is None:
-        from amic.generation.gateway.ollama import OllamaGateway
+        if llm_factory is None:
+            from amic.generation.gateway.ollama import OllamaGateway
 
-        m = s.models
-        llm = OllamaGateway(m.tutor, m.ollama_base_url, m.temperature, m.seed, m.max_answer_tokens)
+            m = s.models
+
+            def llm_factory(name: str) -> LLMGateway:
+                return OllamaGateway(
+                    name, m.ollama_base_url, m.temperature, m.seed, m.max_answer_tokens
+                )
+
+        llm = llm_factory(s.models.tutor)
     if redis is None and s.session_backend == "redis":
         import redis as redis_lib
         from redis.backoff import ExponentialBackoff
@@ -103,6 +134,7 @@ def build_components(
         planner=RoutePlanner(s.routes),
         sketches=sketches,
         config_hash=s.config_hash(),
+        llm_factory=llm_factory,
     )
 
 

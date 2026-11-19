@@ -144,3 +144,52 @@ def test_session_backends_are_equivalent(backend, tmp_path):
     assert [t.text for t in sm.get_turns("s2")] == ["t3", "t4"]
     sm.erase_tenant("u")
     assert sm.tenant_meta("u") == {} and sm.get_turns("s2") == []
+
+
+def test_baseline_known_for_free_on_the_baseline_route(comps, seed_history):
+    seed_history(comps, "ivy", HISTORY)
+    _ask(comps, "always", "ivy", "s1", "Why did my list loop give an IndexError?")
+    t = comps.telemetry.traces[-1]
+    assert t.baseline_memory_tokens == t.memory_tokens > 0
+    assert t.model == comps.llm.model
+
+
+def test_shadow_baseline_runs_after_the_response_and_off_by_default(comps, seed_history):
+    seed_history(comps, "jo", HISTORY)
+    arm = build_arm("never", comps)
+    q = "Why did my list loop give an IndexError?"
+
+    resp, job = arm.answer_deferred(make_context(comps, "jo", "s1", q, "never", now=T0))
+    job()
+    assert comps.telemetry.traces[-1].baseline_memory_tokens is None  # off: nothing measured
+    assert comps.retrieval.calls == 0
+
+    comps.settings.telemetry.shadow_baseline = True
+    resp, job = arm.answer_deferred(
+        make_context(comps, "jo", "s2", q, "never", now=T0), write=False
+    )
+    assert resp.decision.route == Route.SKIP and comps.retrieval.calls == 0  # response path clean
+    n_mem = comps.episodic.count("jo")
+    job()
+    t = comps.telemetry.traces[-1]
+    assert comps.retrieval.calls == 1 and t.baseline_memory_tokens and t.baseline_memory_tokens > 0
+    assert t.memory_tokens == 0 and comps.episodic.count("jo") == n_mem  # write=False: frozen
+
+
+def test_per_request_model_selection(comps):
+    from amic.app import UnknownModelError
+    from amic.generation.gateway.base import FakeLLM
+
+    def factory(name):
+        llm = FakeLLM()
+        llm.model = name
+        return llm
+
+    comps.llm_factory = factory
+    comps.settings.models.available = ["small-model"]
+    _ask(comps, "never", "kim", "s1", "what is a tuple?", model="small-model")
+    assert comps.telemetry.traces[-1].model == "small-model"
+    _ask(comps, "never", "kim", "s1", "and a list?")
+    assert comps.telemetry.traces[-1].model == comps.llm.model
+    with pytest.raises(UnknownModelError):
+        _ask(comps, "never", "kim", "s1", "x", model="not-allowed")

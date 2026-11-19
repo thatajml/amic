@@ -60,6 +60,7 @@ class RequestContext(BaseModel):
     oracle_label: bool | None = None  # experiments only, read by the oracle arm
     oracle_depth: Route | None = None  # experiments only: SHALLOW or DEEP
     now: datetime | None = None  # simulated clock for seeding/experiments; None = wall clock
+    model: str | None = None  # tutor model override (must be in models.available); None = default
 
 
 class RetrievalPlan(BaseModel):
@@ -143,6 +144,11 @@ class DecisionTrace(BaseModel):
     cache_hit: bool = False
     features: dict[str, float] = Field(default_factory=dict)
     oracle_label: bool | None = None
+    model: str = ""  # the tutor model that generated the answer
+    # Memory tokens the always-retrieve baseline (routes.always_route) would have injected for
+    # this query. Known for free when route == always_route; otherwise filled by the optional
+    # shadow measurement (telemetry.shadow_baseline). None = not measured.
+    baseline_memory_tokens: int | None = None
 
 
 class AgentResponse(BaseModel):

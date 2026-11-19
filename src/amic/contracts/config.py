@@ -48,6 +48,9 @@ class ModelConfig(BaseModel):
     embedding: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_device: str = "cpu"
     tutor: str = "llama3.1:8b"
+    # Extra tutor models a request may select (ChatRequest.model). The default tutor is always
+    # allowed. Each must be served by the same Ollama host (`ollama pull <name>`).
+    available: list[str] = Field(default_factory=list)
     tier2: str = "llama3.2:3b"
     ollama_base_url: str = "http://localhost:11434"
     # gemini-2.5-flash is closed to new users; 3.8-flash took ~71 s/call (2026-11-18 test);
@@ -60,6 +63,15 @@ class ModelConfig(BaseModel):
     max_answer_tokens: int = 256
 
 
+class TelemetryConfig(BaseModel):
+    # Shadow baseline: after the response is sent, run the always-retrieve plan (retrieval +
+    # assembly only, no generation) to count the memory tokens AMIC avoided, and store them on
+    # the trace. It costs a retrieval per non-baseline request, off the response path, so it is a
+    # measurement aid for the live dashboard. Experiments leave it off: there the `always` arm
+    # supplies the baseline directly.
+    shadow_baseline: bool = False
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AMIC_", env_nested_delimiter="__", env_file=".env", extra="ignore"
@@ -70,6 +82,7 @@ class Settings(BaseSettings):
     ablation: AblationFlags = Field(default_factory=AblationFlags)
     routes: RouteConfig = Field(default_factory=RouteConfig)
     models: ModelConfig = Field(default_factory=ModelConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     session_backend: Literal["redis", "sqlite"] = "redis"  # sqlite: offline runs, no Docker
     session_db: str = "data/sessions.sqlite"
     redis_url: str = "redis://localhost:6379/0"

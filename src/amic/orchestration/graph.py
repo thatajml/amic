@@ -5,6 +5,8 @@
 
 Arms differ ONLY in `decide`, so every comparison isolates the gating decision.
 The long-term write is returned as a deferred job and is never timed on the response path (P5).
+The optional shadow-baseline measurement (telemetry.shadow_baseline) runs in that same job,
+before the write, so it never touches the response path or a SKIP's zero-retrieval guarantee.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ class RunState(TypedDict, total=False):
     memory_block: str
     memory_tokens: int
     llm: LLMResult
+    model: str
     answer: str
     lat: dict[str, float]
     t_start: float
@@ -117,10 +120,12 @@ class PipelineArm:
     def _generate_node(self, state: RunState) -> dict[str, Any]:
         ctx = state["ctx"]
         msgs = self.c.prompts.build(ctx.query, ctx.m0_turns, state.get("memory_block", ""))
+        llm = self.c.llm_for(ctx.model)
         t = time.perf_counter()
-        res = self.c.llm.chat(msgs, seed=self.c.settings.models.seed)
+        res = llm.chat(msgs, seed=self.c.settings.models.seed)
         return {
             "llm": res,
+            "model": llm.model,
             "answer": res.text.strip(),
             "lat": {
                 **state.get("lat", {}),
@@ -142,9 +147,10 @@ class PipelineArm:
         lat = {**state.get("lat", {}), "total": _ms(state["t_start"])}
         d = state["decision"]
         res = state["llm"]
+        mem_tok = state.get("memory_tokens", 0)
         trace = DecisionTrace(
             request_id=ctx.request_id,
-            ts=now,
+            ts=datetime.now(UTC),  # wall clock: when it was served (ctx.now may be simulated)
             tenant_id=ctx.tenant_id,
             session_id=ctx.session_id,
             arm=self.name,
@@ -158,16 +164,36 @@ class PipelineArm:
             latency=LatencySplit(**lat),
             prompt_tokens=res.prompt_tokens,
             completion_tokens=res.completion_tokens,
-            memory_tokens=state.get("memory_tokens", 0),
+            memory_tokens=mem_tok,
             n_items=len(state.get("items", [])),
             features=state.get("features", {}),
             oracle_label=ctx.oracle_label,
+            model=state.get("model", ""),
+            baseline_memory_tokens=mem_tok if d.route == self._baseline_route() else None,
         )
         self.c.telemetry.record(trace)
         return {"lat": lat}
 
+    # ----------------------------------------------------------------- shadow baseline
+    def _baseline_route(self) -> Route:
+        return Route(self.c.settings.routes.always_route)
+
+    def shadow_baseline_tokens(self, ctx: RequestContext, q_vec: np.ndarray | None) -> int:
+        """Memory tokens the always-retrieve plan would inject for `ctx` (no generation)."""
+        if q_vec is None:
+            q_vec = self.c.embedder.encode(ctx.query)
+        plan = self.c.planner.plan(self._baseline_route())
+        items = self.c.retrieval.retrieve(plan, q_vec, ctx.tenant_id)
+        return self.c.assembler.assemble(items, plan.token_budget)[2]
+
     # ----------------------------------------------------------------- public
-    def answer_deferred(self, ctx: RequestContext) -> tuple[AgentResponse, WriteJob]:
+    def answer_deferred(
+        self, ctx: RequestContext, *, write: bool = True
+    ) -> tuple[AgentResponse, WriteJob]:
+        """Answer now; return the deferred job (shadow baseline if enabled, then the write).
+
+        `write=False` keeps memory frozen (experiments, traffic simulation).
+        """
         state: RunState = {"ctx": ctx, "lat": {}, "t_start": time.perf_counter()}
         out = self._graph.invoke(state)
         resp = AgentResponse(
@@ -178,10 +204,20 @@ class PipelineArm:
         )
         now = ctx.now or datetime.now(UTC)
 
+        shadow = (
+            self.c.settings.telemetry.shadow_baseline
+            and out["decision"].route != self._baseline_route()
+            and hasattr(self.c.telemetry, "annotate")
+        )
+
         def job() -> None:
-            self.c.writer.write_turn(
-                ctx.tenant_id, ctx.session_id, ctx.request_id, ctx.query, resp.answer, now
-            )
+            if shadow:  # before the write, so the baseline sees the same memory the gate saw
+                tok = self.shadow_baseline_tokens(ctx, out.get("q_vec"))
+                self.c.telemetry.annotate(ctx.request_id, baseline_memory_tokens=tok)  # type: ignore[attr-defined]
+            if write:
+                self.c.writer.write_turn(
+                    ctx.tenant_id, ctx.session_id, ctx.request_id, ctx.query, resp.answer, now
+                )
 
         return resp, job
 

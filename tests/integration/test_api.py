@@ -39,3 +39,19 @@ def test_bad_request(comps):
             ).status_code
             == 422
         )
+
+
+def test_unknown_model_is_a_400_and_health_lists_models(comps):
+    with TestClient(create_app(comps)) as client:
+        assert client.get("/health").json()["models"] == [comps.llm.model]
+        r = client.post(
+            "/chat",
+            json={
+                "tenant_id": "a",
+                "session_id": "s",
+                "query": "hi",
+                "arm": "never",
+                "model": "nope",
+            },
+        )
+        assert r.status_code == 400 and "not available" in r.json()["detail"]

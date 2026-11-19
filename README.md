@@ -19,6 +19,33 @@ cp .env.example .env
 pytest
 ```
 
+## Run the whole stack
+
+```bat
+start-amic.cmd              :: Ollama (+ tutor model preloaded), API on :8080, dashboard on :8501
+start-amic.cmd -Infra       :: also Docker Redis/Chroma (automatic when the config needs them)
+start-amic.cmd -Stop        :: stop the API and dashboard
+```
+
+Each step is skipped if it is already up. Logs and PIDs are in `data/run/`. The API runs with
+the shadow baseline on, so the dashboard shows savings.
+
+## Usage dashboard
+
+A live view of token usage per model and of what the gate saves compared with always retrieving:
+
+```bash
+pip install -e ".[ui]"
+streamlit run ui/dashboard.py                         # reads data/metrics.db, refreshes every 5 s
+python scripts/simulate_traffic.py --rate 0.5         # replays edu questions (frozen edu_v1 memory)
+python scripts/simulate_traffic.py --fake-llm --rate 5 --models fake-a fake-b   # no Ollama
+```
+
+For real API traffic, start the API with `AMIC_TELEMETRY__SHADOW_BASELINE=true`. After each
+response it measures how many memory tokens the always-retrieve baseline would have used. To
+compare several models, list the extra ones in `models.available` and pass `"model"` in
+`POST /chat`. Prices are in `configs/pricing.yaml` and are placeholders until you set real ones.
+
 ## Ownership
 
 The initial full build across all layers (L1–L8) is done by **@thatajml** (Ala Ajmal Malik). The
