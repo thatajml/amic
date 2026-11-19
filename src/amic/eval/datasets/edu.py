@@ -361,6 +361,15 @@ def history_transcript(learner: Learner, max_chars: int = 9000) -> str:
     return txt if len(txt) <= max_chars else txt[:max_chars] + "\n[...]"
 
 
+def split_of(learner_ids: list[str], seed: int = 13) -> dict[str, str]:
+    """60/20/20 train/val/test split BY LEARNER (no learner appears in two splits)."""
+    ids = sorted(learner_ids)
+    random.Random(seed).shuffle(ids)
+    n = len(ids)
+    a, b = int(0.6 * n), int(0.8 * n)
+    return {i: ("train" if k < a else "val" if k < b else "test") for k, i in enumerate(ids)}
+
+
 # ------------------------------------------------------------------------- seeding
 def exchanges(session: DSession) -> list[tuple[str, str]]:
     """Pair each student turn with the following tutor turn."""
