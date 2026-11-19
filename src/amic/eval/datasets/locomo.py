@@ -56,15 +56,22 @@ def turn_text(t: dict[str, Any]) -> str:
     return txt
 
 
-def seed(comps: Any, convs: list[dict[str, Any]]) -> int:
-    """One M1 record per dialogue turn, timestamped from the session date."""
+def seed(comps: Any, convs: list[dict[str, Any]], write_memory: bool = True) -> int:
+    """One M1 record per dialogue turn, timestamped from the session date.
+    write_memory=False re-seeds only the session metadata."""
     n = 0
     for conv in convs:
         tenant = tenant_of(conv)
-        comps.episodic.delete_tenant(tenant)
+        if write_memory:
+            comps.episodic.delete_tenant(tenant)
         comps.sessions.erase_tenant(tenant)
         for sid, start, turns in sessions(conv):
             comps.sessions.touch(tenant, f"{tenant}-{sid}", start)
+            if not write_memory:
+                comps.sessions.touch(
+                    tenant, f"{tenant}-{sid}", start + timedelta(minutes=len(turns))
+                )
+                continue
             texts = [turn_text(t) for t in turns]
             vecs = comps.embedder.encode_many(texts)
             for j, (t, txt) in enumerate(zip(turns, texts, strict=True)):

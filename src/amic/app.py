@@ -18,7 +18,7 @@ from amic.memory.retrieval import ChromaRetrievalEngine
 from amic.memory.sketch import EpisodicSketchStore
 from amic.memory.stores.episodic import EpisodicStore, make_chroma_client
 from amic.orchestration.graph import PipelineArm, new_request_id
-from amic.service.session import SessionManager
+from amic.service.session import SessionManager, SqliteSessionManager
 from amic.writepath.writer import MemoryWriter
 
 
@@ -31,7 +31,7 @@ class Components:
     assembler: ContextAssembler
     prompts: PromptBuilder
     llm: LLMGateway
-    sessions: SessionManager
+    sessions: SessionManager | SqliteSessionManager
     telemetry: TelemetryCollector
     writer: MemoryWriter
     planner: RoutePlanner
@@ -59,10 +59,19 @@ def build_components(
 
         m = s.models
         llm = OllamaGateway(m.tutor, m.ollama_base_url, m.temperature, m.seed, m.max_answer_tokens)
-    if redis is None:
+    if redis is None and s.session_backend == "redis":
         import redis as redis_lib
+        from redis.backoff import ExponentialBackoff
+        from redis.retry import Retry
 
-        redis = redis_lib.Redis.from_url(s.redis_url)
+        redis = redis_lib.Redis.from_url(
+            s.redis_url,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            health_check_interval=30,
+            retry=Retry(ExponentialBackoff(cap=2.0, base=0.1), retries=5),
+            retry_on_timeout=True,
+        )
     if chroma_client is None:
         chroma_client = make_chroma_client(
             s.chroma_client, s.chroma_path, s.chroma_host, s.chroma_port
@@ -84,7 +93,11 @@ def build_components(
         assembler=ContextAssembler(),
         prompts=PromptBuilder(),
         llm=llm,
-        sessions=SessionManager(redis, s.m0_turns),
+        sessions=(
+            SessionManager(redis, s.m0_turns)
+            if redis is not None
+            else SqliteSessionManager(s.session_db, s.m0_turns)
+        ),
         telemetry=telemetry,
         writer=writer,
         planner=RoutePlanner(s.routes),

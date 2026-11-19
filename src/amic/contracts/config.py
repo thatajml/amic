@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     ablation: AblationFlags = Field(default_factory=AblationFlags)
     routes: RouteConfig = Field(default_factory=RouteConfig)
     models: ModelConfig = Field(default_factory=ModelConfig)
+    session_backend: Literal["redis", "sqlite"] = "redis"  # sqlite: offline runs, no Docker
+    session_db: str = "data/sessions.sqlite"
     redis_url: str = "redis://localhost:6379/0"
     chroma_client: Literal["embedded", "http"] = "embedded"  # see docs/results/probe.md
     chroma_path: str = "data/chroma"

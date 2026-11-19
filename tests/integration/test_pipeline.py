@@ -117,3 +117,30 @@ def test_session_touch_tracks_previous_session(comps):
     assert prev["last_session_id"] == "s1"
     meta = comps.sessions.tenant_meta("gus")
     assert meta["prev_session_end"] == T0.timestamp() and meta["n_sessions"] == 2
+
+
+@pytest.mark.parametrize("backend", ["redis", "sqlite"])
+def test_session_backends_are_equivalent(backend, tmp_path):
+    import fakeredis
+
+    from amic.contracts.models import Turn
+    from amic.service.session import SessionManager, SqliteSessionManager
+
+    sm = (
+        SessionManager(fakeredis.FakeRedis(), m0_turns=2)
+        if backend == "redis"
+        else SqliteSessionManager(str(tmp_path / "s.sqlite"), m0_turns=2)
+    )
+    later = T0 + timedelta(days=2)
+    assert sm.touch("u", "s1", T0) == {}
+    sm.touch("u", "s1", T0 + timedelta(minutes=30))
+    prev = sm.touch("u", "s2", later)
+    assert prev["last_session_id"] == "s1"
+    meta = sm.tenant_meta("u")
+    assert meta["n_sessions"] == 2 and meta["last_session_id"] == "s2"
+    assert meta["prev_session_end"] == (T0 + timedelta(minutes=30)).timestamp()
+    for i in range(5):
+        sm.append("s2", Turn(role="user", text=f"t{i}", ts=later))
+    assert [t.text for t in sm.get_turns("s2")] == ["t3", "t4"]
+    sm.erase_tenant("u")
+    assert sm.tenant_meta("u") == {} and sm.get_turns("s2") == []

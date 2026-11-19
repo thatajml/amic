@@ -72,3 +72,107 @@ class SessionManager:
             s = s.decode() if isinstance(s, bytes) else s
             self._r.delete(self._turns_key(s))
         self._r.delete(key, f"{key}:sessions")
+
+
+class SqliteSessionManager:
+    """Same contract as SessionManager, backed by one SQLite file (no Docker needed).
+
+    Used for offline labelling/experiments on the dev laptop, where Docker Desktop's WSL VM was
+    killed under memory pressure (2026-11-18). The service keeps Redis by default.
+    """
+
+    def __init__(self, path: str = "data/sessions.sqlite", m0_turns: int = 6) -> None:
+        import sqlite3
+        import threading
+        from pathlib import Path
+
+        if path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.executescript(
+            """CREATE TABLE IF NOT EXISTS turns (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, body TEXT);
+               CREATE INDEX IF NOT EXISTS turns_s ON turns(session_id, id);
+               CREATE TABLE IF NOT EXISTS tenant (
+                   tenant_id TEXT PRIMARY KEY, last_session_id TEXT, last_seen REAL,
+                   prev_session_end REAL, n_sessions REAL);
+               CREATE TABLE IF NOT EXISTS tenant_sessions (
+                   tenant_id TEXT, session_id TEXT, PRIMARY KEY (tenant_id, session_id));"""
+        )
+        self._lock = threading.Lock()
+        self._n = m0_turns
+
+    def get_turns(self, session_id: str, n: int | None = None) -> list[Turn]:
+        n = self._n if n is None else n
+        if n <= 0:
+            return []
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT body FROM turns WHERE session_id=? ORDER BY id DESC LIMIT ?",
+                (session_id, n),
+            ).fetchall()
+        return [Turn.model_validate_json(r[0]) for r in reversed(rows)]
+
+    def append(self, session_id: str, *turns: Turn) -> None:
+        with self._lock:
+            self._db.executemany(
+                "INSERT INTO turns (session_id, body) VALUES (?, ?)",
+                [(session_id, t.model_dump_json()) for t in turns],
+            )
+            self._db.execute(
+                "DELETE FROM turns WHERE session_id=? AND id NOT IN "
+                "(SELECT id FROM turns WHERE session_id=? ORDER BY id DESC LIMIT ?)",
+                (session_id, session_id, _KEEP),
+            )
+
+    def touch(self, tenant_id: str, session_id: str, ts: datetime | None = None) -> dict[str, Any]:
+        ts = ts or datetime.now(UTC)
+        prev = self.tenant_meta(tenant_id)
+        new_session = prev.get("last_session_id") != session_id
+        with self._lock:
+            self._db.execute(
+                """INSERT INTO tenant VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant_id) DO UPDATE SET
+                     last_session_id=excluded.last_session_id, last_seen=excluded.last_seen,
+                     prev_session_end=CASE WHEN ? THEN excluded.prev_session_end
+                                           ELSE tenant.prev_session_end END,
+                     n_sessions=tenant.n_sessions + ?""",
+                (
+                    tenant_id,
+                    session_id,
+                    ts.timestamp(),
+                    prev.get("last_seen", ts.timestamp()) if new_session else None,
+                    1.0 if new_session else 0.0,
+                    int(new_session),
+                    1.0 if new_session else 0.0,
+                ),
+            )
+            self._db.execute(
+                "INSERT OR IGNORE INTO tenant_sessions VALUES (?, ?)", (tenant_id, session_id)
+            )
+        return prev
+
+    def tenant_meta(self, tenant_id: str) -> dict[str, Any]:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT last_session_id, last_seen, prev_session_end, n_sessions "
+                "FROM tenant WHERE tenant_id=?",
+                (tenant_id,),
+            ).fetchone()
+        if row is None:
+            return {}
+        keys = ("last_session_id", "last_seen", "prev_session_end", "n_sessions")
+        return {k: v for k, v in zip(keys, row, strict=True) if v is not None}
+
+    def erase_tenant(self, tenant_id: str) -> None:
+        with self._lock:
+            sess = [
+                r[0]
+                for r in self._db.execute(
+                    "SELECT session_id FROM tenant_sessions WHERE tenant_id=?", (tenant_id,)
+                )
+            ]
+            self._db.executemany("DELETE FROM turns WHERE session_id=?", [(s,) for s in sess])
+            self._db.execute("DELETE FROM tenant_sessions WHERE tenant_id=?", (tenant_id,))
+            self._db.execute("DELETE FROM tenant WHERE tenant_id=?", (tenant_id,))

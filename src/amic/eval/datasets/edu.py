@@ -379,12 +379,13 @@ def exchanges(session: DSession) -> list[tuple[str, str]]:
     return out
 
 
-def seed_learner(comps: Any, learner: Learner) -> int:
-    """Write the learner's past sessions into M1 + session metadata, with simulated time."""
+def seed_learner(comps: Any, learner: Learner, write_memory: bool = True) -> int:
+    """Write the learner's past sessions into M1 + session metadata, with simulated time.
+    write_memory=False re-seeds only the session metadata (e.g. into a new session backend)."""
     n = 0
     for s in learner.sessions:
         comps.sessions.touch(learner.learner_id, s.session_id, s.start)
-        for j, (q, a) in enumerate(exchanges(s)):
+        for j, (q, a) in enumerate(exchanges(s) if write_memory else []):
             ts = s.start + timedelta(minutes=3 * j)
             comps.writer.write_turn(
                 learner.learner_id, s.session_id, f"{s.session_id}-x{j + 1}", q, a, ts
