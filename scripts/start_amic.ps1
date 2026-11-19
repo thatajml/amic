@@ -27,7 +27,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
-$Py = Join-Path $Root '.venv\Scripts\python.exe'
+. (Join-Path $PSScriptRoot 'amic_env.ps1')
 $RunDir = Join-Path $Root 'data\run'
 New-Item -ItemType Directory -Force $RunDir | Out-Null
 
@@ -36,6 +36,9 @@ function Write-Ok([string]$msg) { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Skip([string]$msg) { Write-Host "    $msg" -ForegroundColor DarkGray }
 
 function Test-Url([string]$url) {
+    # PowerShell 5.1 tries IPv6 ::1 for "localhost" first; Ollama listens on IPv4 only and the
+    # fallback can outlast the timeout, so probe 127.0.0.1 directly.
+    $url = $url -replace '//localhost([:/])', '//127.0.0.1$1'
     try {
         $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3
         return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300)
@@ -85,7 +88,8 @@ if ($Stop) {
     exit 0
 }
 
-if (-not (Test-Path $Py)) { throw "No virtualenv at $Py. See README Quick start." }
+$Py = Get-AmicPython $Root  # .venv or conda env, per AMIC_ENV (scripts/amic_env.ps1)
+Write-Host "    python: $Py" -ForegroundColor DarkGray
 
 # Effective config (.env + AMIC_* env), read the same way the app reads it.
 $cfgJson = & $Py -c "import json; from amic.contracts.config import Settings as S; s=S(); print(json.dumps({'session': s.session_backend, 'chroma': s.chroma_client, 'redis': s.redis_url, 'ollama': s.models.ollama_base_url, 'tutor': s.models.tutor}))"
@@ -128,7 +132,8 @@ if (-not (& $ollamaOk)) {
 Write-Skip "preloading $($cfg.tutor)..."
 $body = @{ model = $cfg.tutor; keep_alive = '30m' } | ConvertTo-Json
 try {
-    Invoke-RestMethod -Method Post -Uri "$($cfg.ollama)/api/generate" -Body $body `
+    $ollamaApi = $cfg.ollama -replace '//localhost([:/])', '//127.0.0.1$1'
+    Invoke-RestMethod -Method Post -Uri "$ollamaApi/api/generate" -Body $body `
         -ContentType 'application/json' -TimeoutSec 180 | Out-Null
     Write-Ok "Ollama up, $($cfg.tutor) loaded"
 } catch {

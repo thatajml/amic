@@ -19,6 +19,22 @@ cp .env.example .env
 pytest
 ```
 
+### Python environment: venv or conda
+
+`setup-amic.cmd` creates or updates the environment with every extra installed. On an NVIDIA
+machine it installs CUDA torch first. Re-run it to update.
+
+```bat
+setup-amic.cmd conda        :: conda env "amic" from environment.yml (Miniconda, conda-forge only)
+setup-amic.cmd venv         :: .venv in the repo
+setup-amic.cmd conda -Cpu   :: skip CUDA torch
+```
+
+It records the choice as `AMIC_ENV` in `.env`, and `start-amic.cmd` and `chat-amic.cmd` use it:
+`venv`, `conda` (env `AMIC_CONDA_ENV`, default `amic`), or `auto` (`.venv` if present, else
+conda). `AMIC_PYTHON=<path>` overrides all of these. To work in a shell, run `conda activate amic`.
+`conda env create -f environment.yml` also works, but on Windows it installs CPU-only torch.
+
 ## Run the whole stack
 
 ```bat
@@ -26,6 +42,11 @@ start-amic.cmd              :: Ollama (+ tutor model preloaded), API on :8080, d
 start-amic.cmd -Infra       :: also Docker Redis/Chroma (automatic when the config needs them)
 start-amic.cmd -Stop        :: stop the API and dashboard
 ```
+
+To chat with the tutor in the terminal, run `chat-amic.cmd`. Each answer is followed by AMIC's
+decision panel (route, reason, memory used, latency, tokens). It chats as seeded learner `edu-001`
+and saves new turns to memory. Use `--learner <name>` for a new learner, `--frozen` to save
+nothing, `--arm always` to compare with the always-retrieve baseline, and `--script` for 3 canned turns.
 
 Each step is skipped if it is already up. Logs and PIDs are in `data/run/`. The API runs with
 the shadow baseline on, so the dashboard shows savings.

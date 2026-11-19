@@ -75,10 +75,13 @@ def main() -> None:
     print(f"AMIC demo · arm={a.arm} · config={c.config_hash} · type 'quit' to exit\n")
 
     def turn(learner: str, q: str) -> None:
+        if a.script:  # typed turns are already on screen
+            print(f"\n[{learner}] > {q}")
+        print("  thinking...", end="\r", flush=True)
         ctx = make_context(c, learner, f"{session}-{learner}", q, a.arm)  # type: ignore[arg-type]
         resp, job = arm.answer_deferred(ctx)
-        print(f"\n[{learner}] > {q}\n")
-        print(resp.answer, "\n")
+        print(" " * 14, end="\r")
+        print(f"\n{resp.answer}\n")
         print(panel(resp, tel.traces[-1]))
         if not a.frozen and learner != "demo-newcomer":
             job()

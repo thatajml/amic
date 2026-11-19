@@ -1,0 +1,13 @@
+# Conda environment for AMIC. Preferred: `setup-amic.cmd conda` (installs CUDA torch first on
+# NVIDIA machines). Plain conda also works: `conda env create -f environment.yml`, but on Windows
+# that gets PyPI's CPU-only torch.
+# conda-forge only: Anaconda's `defaults` channel needs a Terms of Service acceptance.
+name: amic
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.13
+  - pip
+  - pip:
+      - -e .[all]
