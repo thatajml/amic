@@ -21,6 +21,25 @@ def test_daily_quota_detected_and_parsed():
     assert daily_quota_retry_after(e) == pytest.approx(21 * 3600 + 7 * 60 + 30.3)
 
 
+def test_daily_quota_detected_when_details_only_in_list_body():
+    # Gemini's OpenAI-compatible endpoint: body is a JSON list, so str(e) == "Error code: 429".
+    req = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    body = [
+        {
+            "error": {
+                "code": 429,
+                "message": "You exceeded your current quota ... Generate content requests per "
+                "day limit exceeded on Free Tier.\nPlease retry in 5h55m39.39s.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        }
+    ]
+    e = openai.RateLimitError(
+        "Error code: 429", response=httpx.Response(429, request=req), body=body
+    )
+    assert daily_quota_retry_after(e) == pytest.approx(5 * 3600 + 55 * 60 + 39.39)
+
+
 def test_per_minute_limit_is_not_daily():
     assert (
         daily_quota_retry_after(_rate_limit("Requests per minute exceeded, retry in 12s")) is None

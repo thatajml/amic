@@ -30,7 +30,9 @@ def daily_quota_retry_after(e: BaseException) -> float | None:
 
     if not isinstance(e, openai.RateLimitError):
         return None
-    msg = str(e)
+    # Gemini's OpenAI-compatible endpoint returns the error body as a JSON *list*, which the
+    # SDK does not unpack: str(e) is then just "Error code: 429". The details are in e.body.
+    msg = f"{e} {getattr(e, 'body', '') or ''}"
     if "per day" not in msg.lower() and "perday" not in msg.lower():
         return None  # per-minute limit: transient, let tenacity back off
     m = _RETRY_IN.search(msg)
