@@ -1,8 +1,9 @@
 """RoutePlanner: Route -> RetrievalPlan + token budget. Shared by all arms so routes mean the
 same thing everywhere (the `always` arm's DEEP is exactly AMIC's DEEP).
 
-Stores per route come from RouteConfig (default M1 only, as in the first results; with M2:
-SHALLOW = top facts, DEEP = wide M1 + MMR plus facts)."""
+Stores per route come from RouteConfig (default M1 only, as in the first results; the brief's
+routes: SHALLOW = M3 profile + top M2 facts, DEEP = wide M1 + M2 + M3 with MMR, cross-encoder
+rerank and one entity hop)."""
 
 from __future__ import annotations
 
@@ -27,6 +28,9 @@ class RoutePlanner:
                 stores=[MemoryTier(s) for s in c.deep_stores],
                 k=c.deep_k,
                 mmr=c.deep_mmr,
+                mmr_lambda=c.deep_mmr_lambda,
+                rerank=c.deep_rerank,
+                hops=c.deep_hops,
                 token_budget=c.deep_token_budget,
             )
         return RetrievalPlan()  # SKIP / WRITE: zero vector-store contact

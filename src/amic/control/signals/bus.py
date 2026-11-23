@@ -210,11 +210,19 @@ def _count(rx: re.Pattern[str], s: str) -> float:
 
 
 class SignalBus:
-    def __init__(self, embedder: Any, sketches: Any, sessions: Any, use_sketch: bool = True):
+    def __init__(
+        self,
+        embedder: Any,
+        sketches: Any,
+        sessions: Any,
+        use_sketch: bool = True,
+        uncertainty: Any = None,
+    ):
         self.embedder = embedder
         self.sketches = sketches
         self.sessions = sessions
         self.use_sketch = use_sketch
+        self.uncertainty = uncertainty  # optional S5 (UncertaintySignal); adds s5_* features
 
     def extract(self, ctx: RequestContext, q_vec: np.ndarray | None = None) -> Signals:
         t0 = time.perf_counter()
@@ -224,12 +232,16 @@ class SignalBus:
         sketch = self.sketches.get(ctx.tenant_id)
         meta = self.sessions.tenant_meta(ctx.tenant_id)
         feats = compute_features(ctx, q_vec, sketch, meta, self.use_sketch)
+        is_command = bool(COMMAND.match(ctx.query))
+        if self.uncertainty is not None and not is_command and feats["s3_has_memory"] > 0:
+            # only where Tier 1 can run (R1/R4 resolve first); counted in C_feat
+            feats.update(self.uncertainty.features(ctx.query, ctx.m0_turns, ctx.now))
         t2 = time.perf_counter()
         return Signals(
             q_vec=q_vec,
             features=feats,
             sketch=sketch,
-            is_command=bool(COMMAND.match(ctx.query)),
+            is_command=is_command,
             embed_ms=(t1 - t0) * 1000,
             feat_ms=(t2 - t1) * 1000,
         )

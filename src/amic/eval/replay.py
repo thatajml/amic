@@ -49,8 +49,10 @@ def replay(
         df = s3_ablated(df)
     ctl = Controller(settings, RoutePlanner(settings.routes), tier1, tier2=tier2)
     rows: list[dict[str, Any]] = []
-    for rec in df[["probe_id", *FEATURES]].to_dict("records"):
-        feats = {k: float(rec[k]) for k in FEATURES}
+    # extra model features present in the frame (e.g. S5) are passed through as signals
+    extra = [f for f in (tier1.features if tier1 else []) if f not in FEATURES and f in df]
+    for rec in df[["probe_id", *FEATURES, *extra]].to_dict("records"):
+        feats = {k: float(rec[k]) for k in (*FEATURES, *extra)}
         sig = Signals(np.zeros(1), feats, None, False, 0.0, 0.0)
         ctx = RequestContext(
             request_id=rec["probe_id"], tenant_id="", session_id="replay", query="", arm="amic"

@@ -10,6 +10,8 @@ Arms differ ONLY in `decide`, so every comparison isolates the gating decision.
 memory (route SKIP) for a learner who has memory; a failed check retries ONCE with the
 `verify.escalation_route` memory (P6: a wrong skip must be recoverable, bounded to one retry).
 The long-term write is returned as a deferred job and is never timed on the response path (P5).
+Route WRITE (Tier 0 R4: `/remember`, `/forget`) answers with a fixed acknowledgement, no LLM call,
+and the deferred job enqueues the command for the worker.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from amic.contracts.models import (
     WriteIntent,
 )
 from amic.generation.gateway.base import LLMResult
+from amic.writepath.commands import acknowledgement, parse_command
 
 if TYPE_CHECKING:  # avoids an import cycle with amic.app
     from amic.app import Components
@@ -137,7 +140,8 @@ class PipelineArm:
         lat = upd.get("lat", state.get("lat", {}))
         d = state["decision"]
         t = time.perf_counter()
-        items = self.c.retrieval.retrieve(d.plan, q_vec, state["ctx"].tenant_id)
+        ctx = state["ctx"]
+        items = self.c.retrieval.retrieve(d.plan, q_vec, ctx.tenant_id, query=ctx.query)
         block, used, mem_tok = self.c.assembler.assemble(items, d.token_budget)
         key = "esc_retrieval" if state.get("escalated") else "retrieval"
         return {
@@ -150,6 +154,11 @@ class PipelineArm:
 
     def _generate_node(self, state: RunState) -> dict[str, Any]:
         ctx = state["ctx"]
+        cmd = parse_command(ctx.query) if state["decision"].route == Route.WRITE else None
+        if cmd is not None:  # explicit command: fixed acknowledgement, no LLM call, no tokens
+            ack = acknowledgement(cmd)
+            lat = {**state.get("lat", {}), "generation": 0.0}
+            return {"llm": LLMResult(ack, 0, 0, 0.0), "answer": ack, "lat": lat}
         msgs = self.c.prompts.build(
             ctx.query, ctx.m0_turns, state.get("memory_block", ""), now=ctx.now
         )
@@ -257,17 +266,21 @@ class PipelineArm:
         def job() -> None:
             # P5: the response path only enqueues; consolidation (M1, facts into M2, version
             # bump) runs in the worker, or right here for the inline queue
+            cmd = parse_command(ctx.query) if resp.decision.route == Route.WRITE else None
+            if cmd is not None and not cmd.text:
+                return  # an empty command: nothing to store
             intent = WriteIntent(
                 tenant_id=ctx.tenant_id,
                 session_id=ctx.session_id,
                 record_id=ctx.request_id,
-                query=ctx.query,
-                answer=resp.answer,
+                query=cmd.text if cmd else ctx.query,
+                answer="" if cmd else resp.answer,
                 ts=now,
+                op=cmd.op if cmd else "turn",  # type: ignore[arg-type]
             )
             if self.c.write_queue is not None:
                 self.c.write_queue.enqueue(intent)
-            else:
+            elif cmd is None:
                 self.c.writer.write_turn(
                     ctx.tenant_id, ctx.session_id, ctx.request_id, ctx.query, resp.answer, now
                 )

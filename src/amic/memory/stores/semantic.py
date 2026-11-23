@@ -103,5 +103,19 @@ class SemanticStore:
         where = self._store._where(tenant_id, CURRENT if current_only else None)
         return len(col.get(where=where, include=[])["ids"])
 
+    def records(self, tenant_id: str) -> list[tuple[str, str, dict, np.ndarray]]:
+        """(id, text, metadata, embedding) of every fact, current or not."""
+        return self._store.records(tenant_id)
+
+    def patch(self, tenant_id: str, fact_id: str, **fields: float | str) -> None:
+        self._patch(tenant_id, fact_id, **fields)
+
+    def tenants(self) -> list[str]:
+        return self._store.tenants()
+
+    def delete_ids(self, tenant_id: str, ids: list[str]) -> int:
+        """Hard delete (an explicit /forget or a TTL on closed history), not a validity close."""
+        return self._store.delete_ids(tenant_id, ids)
+
     def delete_tenant(self, tenant_id: str) -> int:
         return self._store.delete_tenant(tenant_id)

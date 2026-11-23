@@ -141,7 +141,10 @@ def test_erasure_clears_m1_m2_and_the_sketch(chroma_client, tmp_path):
         make_context(c, "carol", "s1", "my parrot simulator crashes on line 42", "never", now=T0)
     )
     assert c.episodic.count("carol") == 1 and c.semantic.count("carol") == 1
+    prof = c.profiles.get("carol")  # M3: the misconception fact lowered range mastery
+    assert prof is not None and prof.mastery["for loops and range"].m < 0.5
     with TestClient(create_app(c)) as client:
         out = client.delete("/learners/carol").json()
-    assert out == {"deleted_records": 1, "deleted_facts": 1}
+    assert out == {"deleted_records": 1, "deleted_facts": 1, "deleted_profile": 1}
     assert c.sketches.get("carol") is None  # R1 (no memory) fires again
+    assert c.profiles.get("carol") is None  # verified erasure across M1-M4

@@ -68,3 +68,26 @@ class OllamaGateway:
             prefill_ms=(r.get("prompt_eval_duration") or 0) / 1e6,
             decode_ms=(r.get("eval_duration") or 0) / 1e6,
         )
+
+    def draft_logprobs(
+        self, messages: list[Message], max_tokens: int = 16, top: int = 5
+    ) -> tuple[str, list[list[float]], float]:
+        """A short greedy draft with the top-`top` log-probabilities of every generated token
+        (S5 uncertainty signal; needs Ollama >= 0.12). Returns (text, per-token top logprobs,
+        wall ms)."""
+        opts = {**self._defaults, "num_predict": max_tokens, "temperature": 0.0}
+        t = time.perf_counter()
+        r = self._client.chat(
+            model=self.model,
+            messages=messages,
+            options=opts,
+            keep_alive=self._keep_alive,
+            logprobs=True,
+            top_logprobs=top,
+        )
+        wall = (time.perf_counter() - t) * 1000
+        per_token = []
+        for tok in r.get("logprobs") or []:
+            tops = tok.get("top_logprobs") or [{"logprob": tok.get("logprob", 0.0)}]
+            per_token.append([float(x["logprob"]) for x in tops])
+        return r["message"]["content"], per_token, wall

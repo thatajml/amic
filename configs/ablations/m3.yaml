@@ -1,0 +1,7 @@
+# The brief's SHALLOW route (pre-registered P1): the M3 learner profile block + the top-3 current
+# M2 facts, instead of the top-3 raw turns (M1). Profiles: scripts/build_profiles.py; facts:
+# scripts/extract_facts.py. Run always_m3 with:
+#   --arms always --config configs/ablations/always_shallow.yaml configs/ablations/m3.yaml
+routes:
+  shallow_stores: [M3, M2]
+  shallow_k: 3

@@ -169,3 +169,6 @@ class WriteIntent(BaseModel):
     answer: str
     ts: datetime
     metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    # "turn": a finished exchange; "remember"/"forget": an explicit command (route WRITE), whose
+    # payload is in `query` (additive field; old queued intents default to "turn")
+    op: Literal["turn", "remember", "forget"] = "turn"

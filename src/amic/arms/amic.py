@@ -47,8 +47,19 @@ class AmicArm(PipelineArm):
         if tier2 is None and s.ablation.tiers == "full":
             tier2 = build_tier2(comps)
         self.tier2 = tier2
+        uncertainty = None
+        if s.ablation.use_s5:  # S5: a short logprob draft from the local tutor model
+            from amic.app import gate_llm_from_settings
+            from amic.control.signals.uncertainty import UncertaintySignal
+
+            llm = comps.extras.get("s5_llm") or gate_llm_from_settings(s)
+            uncertainty = UncertaintySignal(llm, comps.prompts, s.gate.s5_tokens)
         self.bus = SignalBus(
-            comps.embedder, comps.sketches, comps.sessions, s.ablation.use_sketch_probe
+            comps.embedder,
+            comps.sketches,
+            comps.sessions,
+            s.ablation.use_sketch_probe,
+            uncertainty=uncertainty,
         )
         self.controller = Controller(
             s,

@@ -7,7 +7,9 @@ With lambda = 4, tau* = 0.2. The abstention band [tau_low, tau_high] sits around
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -15,6 +17,14 @@ import numpy as np
 from amic.contracts.config import GateConfig
 
 Verdict = Literal["skip", "retrieve", "abstain"]
+
+
+def load_thresholds(path: str | None, lam: float) -> dict | None:
+    """Recalibrated band offsets, used only if the file exists and was made for this lambda."""
+    if not path or not Path(path).exists():
+        return None
+    rec = json.loads(Path(path).read_text(encoding="utf-8"))
+    return rec if abs(float(rec.get("lam", -1)) - lam) < 1e-9 else None
 
 
 def tau_star(lam: float) -> float:
@@ -32,11 +42,11 @@ class ThresholdPolicy:
     @classmethod
     def from_config(cls, g: GateConfig) -> ThresholdPolicy:
         t = tau_star(g.lam) if g.tau_mode == "cost" else g.tau_fixed
-        return cls(
-            tau=t,
-            tau_low=max(0.0, t - g.band_low_offset),
-            tau_high=min(1.0, t + g.band_high_offset),
-        )
+        lo_off, hi_off = g.band_low_offset, g.band_high_offset
+        rec = load_thresholds(g.thresholds_file, g.lam)
+        if rec is not None:  # written by the recalibration job (python -m amic.jobs recalibrate)
+            lo_off, hi_off = rec["band_low_offset"], rec["band_high_offset"]
+        return cls(tau=t, tau_low=max(0.0, t - lo_off), tau_high=min(1.0, t + hi_off))
 
     def verdict(self, p: float, band: bool = True) -> Verdict:
         """band=False: hard decision at tau (used when there is no abstention tier)."""
@@ -77,3 +87,30 @@ def band_for_rate(
         else:
             hi_off += step
     return max(0.0, tau - lo_off), min(1.0, tau + hi_off)
+
+
+def widest_band_under(p: np.ndarray, tau: float, max_count: float) -> tuple[float, float]:
+    """Band [lo, hi] containing tau, spanning whole p levels, holding the most rows <= max_count.
+
+    Ties go to the narrower band. Edges sit halfway to the next level outside the band.
+    """
+    # 4 decimals: merges float noise (one isotonic level came out as 0.339622 AND 0.339623)
+    pr = np.round(p, 4)
+    levels = np.unique(pr)
+    below = [x for x in levels if x <= tau]
+    above = [x for x in levels if x >= tau]
+    best: tuple[int, float, float, float] | None = None  # (count, -width, lo_level, hi_level)
+    for lo_l in [tau, *below]:
+        for hi_l in [tau, *above]:
+            if lo_l > hi_l:
+                continue
+            n = int(((pr >= lo_l) & (pr <= hi_l)).sum())
+            if n <= max_count and (best is None or (n, -(hi_l - lo_l)) > best[:2]):
+                best = (n, -(hi_l - lo_l), lo_l, hi_l)
+    assert best is not None  # [tau, tau] always qualifies unless max_count < rows at tau
+    _, _, lo_l, hi_l = best
+    nxt_below = [x for x in levels if x < lo_l]
+    nxt_above = [x for x in levels if x > hi_l]
+    lo = (lo_l + nxt_below[-1]) / 2 if nxt_below else 0.0
+    hi = (hi_l + nxt_above[0]) / 2 if nxt_above else 1.0
+    return float(min(lo, tau)), float(max(hi, tau))

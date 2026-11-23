@@ -27,8 +27,14 @@ def test_chat_health_and_background_write(comps):
             json={"tenant_id": "zoe", "session_id": "s1", "query": "and a set?", "arm": "never"},
         )
         assert r2.json()["decision"]["route"] == "SKIP"
-        assert client.delete("/learners/zoe").json() == {"deleted_records": 2, "deleted_facts": 0}
-        assert comps.episodic.count("zoe") == 0
+        # "what is a dict?" is evidence on a curriculum concept: the worker created an M3 profile
+        assert comps.profiles.get("zoe") is not None
+        assert client.delete("/learners/zoe").json() == {
+            "deleted_records": 2,
+            "deleted_facts": 0,
+            "deleted_profile": 1,
+        }
+        assert comps.episodic.count("zoe") == 0 and comps.profiles.get("zoe") is None
 
 
 def test_bad_request(comps):

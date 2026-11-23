@@ -20,36 +20,9 @@ from pathlib import Path
 import numpy as np
 
 from amic.contracts.config import load_settings
-from amic.control.thresholds import tau_star
+from amic.control.thresholds import tau_star, widest_band_under
 from amic.control.tier1 import Tier1Model
 from amic.eval.replay import load_dataset
-
-
-def widest_band_under(p: np.ndarray, tau: float, max_count: float) -> tuple[float, float]:
-    """Band [lo, hi] containing tau, spanning whole p levels, holding the most rows <= max_count.
-
-    Ties go to the narrower band. Edges sit halfway to the next level outside the band.
-    """
-    # 4 decimals: merges float noise (one isotonic level came out as 0.339622 AND 0.339623)
-    pr = np.round(p, 4)
-    levels = np.unique(pr)
-    below = [x for x in levels if x <= tau]
-    above = [x for x in levels if x >= tau]
-    best: tuple[int, float, float, float] | None = None  # (count, -width, lo_level, hi_level)
-    for lo_l in [tau, *below]:
-        for hi_l in [tau, *above]:
-            if lo_l > hi_l:
-                continue
-            n = int(((pr >= lo_l) & (pr <= hi_l)).sum())
-            if n <= max_count and (best is None or (n, -(hi_l - lo_l)) > best[:2]):
-                best = (n, -(hi_l - lo_l), lo_l, hi_l)
-    assert best is not None  # [tau, tau] always qualifies unless max_count < rows at tau
-    _, _, lo_l, hi_l = best
-    nxt_below = [x for x in levels if x < lo_l]
-    nxt_above = [x for x in levels if x > hi_l]
-    lo = (lo_l + nxt_below[-1]) / 2 if nxt_below else 0.0
-    hi = (hi_l + nxt_above[0]) / 2 if nxt_above else 1.0
-    return float(min(lo, tau)), float(max(hi, tau))
 
 
 def main() -> None:

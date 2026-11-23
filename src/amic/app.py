@@ -19,6 +19,7 @@ from amic.memory.embedder import Embedder
 from amic.memory.retrieval import ChromaRetrievalEngine
 from amic.memory.sketch import EpisodicSketchStore
 from amic.memory.stores.episodic import EpisodicStore, make_chroma_client
+from amic.memory.stores.profile import ProfileStore, RedisKV, SqliteKV
 from amic.memory.stores.semantic import SemanticStore
 from amic.orchestration.graph import PipelineArm, new_request_id
 from amic.service.session import SessionManager, SqliteSessionManager
@@ -46,6 +47,7 @@ class Components:
     semantic: SemanticStore | None = None  # M2 facts
     decision_cache: DecisionCache | None = None  # set when ablation.use_cache is on
     write_queue: Any = None  # WriteIntentQueue: where answered turns go (see build_queue)
+    profiles: ProfileStore | None = None  # M3 learner profiles
 
 
 def build_queue(comps: Components, for_worker: bool = False) -> Any:
@@ -155,11 +157,23 @@ def build_components(
             gate_llm = gate_llm_from_settings(s, timeout_s=10.0)
         verifier = ResponseVerifier(s.verify.mode, gate_llm, s.verify.llm_max_tokens)
     semantic = SemanticStore(chroma_client, s.chroma_collection, s.chroma_mode)
+    profiles = ProfileStore(
+        RedisKV(redis)
+        if redis is not None
+        else SqliteKV(":memory:" if s.session_db == ":memory:" else s.profile.db)
+    )
+    reranker = None
+    if s.routes.deep_rerank:
+        from amic.memory.rerank import CrossEncoderReranker
+
+        reranker = CrossEncoderReranker(s.routes.rerank_model, s.routes.rerank_device)
     comps = Components(
         settings=s,
         embedder=embedder,
         episodic=episodic,
-        retrieval=ChromaRetrievalEngine(episodic, s.routes, semantic),
+        retrieval=ChromaRetrievalEngine(
+            episodic, s.routes, semantic, profiles=profiles, embedder=embedder, reranker=reranker
+        ),
         assembler=ContextAssembler(),
         prompts=PromptBuilder.for_profile(s.prompt_profile),
         llm=llm,
@@ -172,6 +186,7 @@ def build_components(
         verifier=verifier,
         gate_llm=gate_llm,
         semantic=semantic,
+        profiles=profiles,
         decision_cache=(
             DecisionCache(s.cache.nbits, s.cache.ttl_s) if s.ablation.use_cache else None
         ),

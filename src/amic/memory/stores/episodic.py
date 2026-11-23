@@ -162,6 +162,52 @@ class EpisodicStore:
             return [], np.zeros((0, 0), dtype=np.float32), []
         return list(got["ids"]), np.asarray(embs, dtype=np.float32), list(got["documents"] or [])
 
+    def records(self, tenant_id: str) -> list[tuple[str, str, dict[str, Any], np.ndarray]]:
+        """(id, text, metadata, embedding) of every record of one learner (forgetting, audit)."""
+        got = self._col(tenant_id).get(
+            where=self._where(tenant_id), include=["embeddings", "documents", "metadatas"]
+        )
+        embs = got["embeddings"]
+        return [
+            (
+                got["ids"][i],
+                (got["documents"] or [""] * len(got["ids"]))[i] or "",
+                dict(got["metadatas"][i] or {}),
+                np.asarray(embs[i], dtype=np.float32),
+            )
+            for i in range(len(got["ids"]))
+        ]
+
+    def tenants(self) -> list[str]:
+        """Learners with at least one record (single-collection mode; per_tenant: by name)."""
+        if self._mode == "single":
+            metas = self._col("").get(include=["metadatas"])["metadatas"] or []
+            return sorted({str(m["tenant_id"]) for m in metas if m and "tenant_id" in m})
+        prefix = f"{self._name}__"
+        out = set()
+        for col in self._client.list_collections():
+            name = col if isinstance(col, str) else col.name
+            if name.startswith(prefix):
+                metas = self._client.get_collection(name).get(include=["metadatas"])["metadatas"]
+                out |= {str(m["tenant_id"]) for m in metas or [] if m and "tenant_id" in m}
+        return sorted(out)
+
+    def delete_ids(self, tenant_id: str, ids: list[str]) -> int:
+        """Delete specific records of one learner (ids of other learners are ignored)."""
+        if not ids:
+            return 0
+        col = self._col(tenant_id)
+        own = col.get(ids=list(ids), where=self._where(tenant_id), include=[])["ids"]
+        if own:
+            col.delete(ids=own)
+        return len(own)
+
+    def update_metadata(self, tenant_id: str, record_id: str, **fields: Any) -> None:
+        col = self._col(tenant_id)
+        got = col.get(ids=[record_id], where=self._where(tenant_id), include=["metadatas"])
+        if got["ids"]:
+            col.update(ids=[record_id], metadatas=[{**dict(got["metadatas"][0] or {}), **fields}])
+
     def delete_tenant(self, tenant_id: str) -> int:
         col = self._col(tenant_id)
         ids = col.get(where=self._where(tenant_id), include=[])["ids"]

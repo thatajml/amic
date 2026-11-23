@@ -1,0 +1,10 @@
+# The brief-complete AMIC system (pre-registered V3). Combine, in this order:
+#   --config configs/ablations/full.yaml configs/ablations/escalate.yaml \
+#            configs/ablations/cache.yaml configs/ablations/m3.yaml configs/ablations/deep_v2.yaml \
+#            configs/ablations/v3.yaml
+# = Tier 0 + Tier 1 + Tier 2, verify-and-escalate, decision cache, the brief's SHALLOW
+# (M3 + top M2 facts) and DEEP (M1 + M2 + M3, MMR, rerank, one hop) routes.
+ablation:
+  tiers: full
+  use_escalation: true
+  use_cache: true

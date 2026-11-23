@@ -1,0 +1,12 @@
+# The brief's DEEP route (pre-registered D1): wide-k over M1 + M2 + M3, MMR, cross-encoder
+# rerank (ms-marco-MiniLM-L-6-v2) and one hop of entity expansion. Run always_deep2 with:
+#   --arms always --config configs/ablations/deep_v2.yaml
+routes:
+  deep_stores: [M3, M1, M2]
+  deep_k: 12
+  deep_fetch_k: 30
+  m2_k: 5
+  deep_mmr: true
+  deep_mmr_lambda: 0.7
+  deep_rerank: true
+  deep_hops: 1

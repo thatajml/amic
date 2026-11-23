@@ -88,17 +88,26 @@ def train_tier1(
     calibration: Literal["isotonic", "platt"] = "isotonic",
     depth_tr: np.ndarray | None = None,
     seed: int = 0,
+    sample_weight: np.ndarray | None = None,
 ) -> Tier1Model:
+    """`sample_weight` (optional) weights training rows, e.g. distilled Tier-2 weak labels."""
     from sklearn.calibration import CalibratedClassifierCV
     from sklearn.frozen import FrozenEstimator
 
-    base = _base(kind, seed).fit(X_tr, y_tr)
+    fit_kw: dict[str, Any] = {}
+    if sample_weight is not None:
+        fit_kw = (
+            {"logisticregression__sample_weight": sample_weight}
+            if kind == "logreg"
+            else {"sample_weight": sample_weight}
+        )
+    base = _base(kind, seed).fit(X_tr, y_tr, **fit_kw)
     method = "isotonic" if calibration == "isotonic" else "sigmoid"
     gate = CalibratedClassifierCV(FrozenEstimator(base), method=method).fit(X_cal, y_cal)
     depth = None
     if depth_tr is not None:
-        mask = y_tr.astype(bool)
-        yd = depth_tr[mask]
+        mask = y_tr.astype(bool) & ~np.isnan(depth_tr.astype(float))
+        yd = depth_tr[mask].astype(int)
         if mask.sum() >= 20 and 0 < yd.sum() < len(yd):
             depth = _base("logreg", seed).fit(X_tr[mask], yd)
     return Tier1Model(features, gate, depth, kind, calibration)

@@ -24,8 +24,8 @@ class AMICController(Protocol):
 @runtime_checkable
 class RetrievalEngine(Protocol):
     def retrieve(
-        self, plan: RetrievalPlan, q_vec: np.ndarray, user_id: str
-    ) -> list[MemoryItem]: ...
+        self, plan: RetrievalPlan, q_vec: np.ndarray, user_id: str, query: str | None = None
+    ) -> list[MemoryItem]: ...  # `query` (additive, optional): text for the DEEP cross-encoder
 
 
 @runtime_checkable
