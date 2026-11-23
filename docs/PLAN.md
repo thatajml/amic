@@ -324,3 +324,42 @@ Each day ends with the system runnable and the tests green. **DoD** = definition
 ## 8. Open items
 
 - A `GEMINI_API_KEY` in `.env` before Day 3 labelling.
+
+## 9. Extension (2026-11-23): the deferred components, pre-registered
+
+After the first results (docs/results/main.md, commit a2eab84) the components cut in section 1
+are being built: verify-and-escalate (M7), Tier 2 + distillation (M6), the decision cache, M2 fact
+extraction and the async write worker (M5 remainder), and LongMemEval. The first results stay the
+primary results; everything below is an extension, and this section is committed **before any
+of its live runs**.
+
+**Rules**
+- Existing runs, labels, features, models and traces are never overwritten; new runs get new names.
+- Every new feature is off by default and switched on by a file in `configs/ablations/`.
+- Tutor answers are served from the generation cache wherever the prompt is identical to one
+  already generated; identical (answer, baseline) pairs reuse the earlier pairwise judgment.
+- Decision rule: a component helps only if the paired difference's 95% CIs clustered by probe
+  **and** by learner both exclude 0 in the helpful direction (8 test learners: the learner
+  bootstrap alone undercovers). Otherwise it is reported as "no detectable effect".
+- Every row below is reported, whatever it shows.
+
+| ID | Comparison | Primary metric | Data |
+|---|---|---|---|
+| E1 | `amic_esc` − `amic` | paired net win vs `always`; memory tokens | edu test, 3 seeds |
+| E2 | `amic_lam1_esc` − `amic_lam1` | same | same |
+| E3 | `never_esc` vs `amic_esc` (verify-only vs gate-first) | same | same |
+| E4 | verify mode: lexical vs llm vs both (offline replay) | net win; P(esc) | same |
+| T1 | full cascade vs the same band failing open to SHALLOW (replay) | expected cost at lambda = 4 | edu test |
+| T2 | `amic_full` − `amic` | paired net win; memory tokens | live |
+| F1 | `always_m2` − `always_shallow` | paired net win; memory tokens | live |
+| V1 | `amic_v2` vs `always`, vs `always_shallow` | net win; memory tokens | live |
+| L1 | gate decisions on LongMemEval_S (cleaned) | retrieval rate; false-skip rate on answerable questions | 500 questions |
+| L2 | `lme_amic`, `lme_amic_esc` vs `lme_always` / `lme_always_shallow` / `lme_never` | QA accuracy difference (CI over questions) | stratified 150 |
+| B1 | break-even with measured C_T2, C_ver, P(esc) | gate overhead vs savings | live traces |
+| C1 | decision cache | hit rate; wrong-hit rate | replay |
+| W1 | write path | enqueue ms vs inline-write ms; time to visibility | benchmark |
+
+Fixed settings: verifier mode `both`, escalation route SHALLOW (at most one retry), Tier 2 band
+sized to 12% of validation traffic with a hard 12% cap and an 800 ms timeout (both fail open to
+SHALLOW), cache key = (learner, memory version, 16-bit LSH of the query vector, M0 present),
+TTL 15 min. LongMemEval runs at temperature 0, one run per arm, with the edu-trained Tier 1.

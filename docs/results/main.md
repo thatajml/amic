@@ -16,39 +16,39 @@ Memory-required: **58.8%** (personalisation-inclusive variant 65.1%). Depth amon
 | m0_followup       |  80 | 50.0%      | 56.2%      |
 | personalize       |  80 | 82.5%      | 82.5%      |
 
-Human vs judge labels (n=98): agreement 63.3%, Cohen's kappa **0.263**. The judge marks memory as required more often than the human annotator (59% vs 51% on the same probes). For reference, kappa human vs the generator's intended category = 0.349; judge vs intended (all 805 probes) = 0.417. Label validity is therefore moderate at best and bounds every downstream metric.
+Human vs judge labels (n=98): agreement 63.3%, Cohen's kappa **0.263** (95% CI 0.080 to 0.349, bootstrap over probes). The judge marks memory as required more often than the human annotator (59% vs 51% on the same probes). For reference, kappa human vs the generator's intended category = 0.349; judge vs intended (all 805 probes) = 0.417. Label validity is therefore moderate at best and bounds every downstream metric.
 
 ## 2. Decision quality (offline replay, education TEST split)
 
-lambda = 4 (tau* = 0.20); n = 161 probes from held-out learners. `cost` = expected cost per query in units of one false retrieve (a false skip costs lambda). `savings_captured` = share of the always->oracle retrieval reduction achieved.
+lambda = 4 (tau* = 0.20); n = 161 probes from held-out learners. `cost` = expected cost per query in units of one false retrieve (a false skip costs lambda). `cost_vs_always` = the policy's cost minus `always`'s on the same probes, with a 95% CI clustered by learner (positive = worse than retrieving every time). `savings_captured` = share of the always->oracle retrieval reduction achieved. 95% CIs are percentile bootstraps that resample whole clusters (fixed seed). The test split has only 8 learners, so learner-clustered intervals are approximate and probably too narrow.
 
-| policy                       | retrieval_rate   | recall   | false_skip_rate   | precision   |    f1 |   cost | savings_captured   | share_tier0   | share_tier1   | share_failopen   | depth_acc   |
-|:-----------------------------|:-----------------|:---------|:------------------|:------------|------:|-------:|:-------------------|:--------------|:--------------|:-----------------|:------------|
-| never                        | 0.0%             | 0.0%     | 100.0%            | 0.0%        | 0     |  2.236 |                    | 0.0%          | 0.0%          | 0.0%             |             |
-| always                       | 100.0%           | 100.0%   | 0.0%              | 55.9%       | 0.717 |  0.441 |                    | 0.0%          | 0.0%          | 0.0%             | 22.2%       |
-| oracle                       | 55.9%            | 100.0%   | 0.0%              | 100.0%      | 1     |  0     |                    | 0.0%          | 0.0%          | 0.0%             | 100.0%      |
-| amic (T0+T1, band->SHALLOW)  | 92.5%            | 94.4%    | 5.6%              | 57.0%       | 0.711 |  0.522 | 16.9%              | 18.0%         | 51.6%         | 30.4%            | 64.7%       |
-| amic, hard tau (no band)     | 90.1%            | 93.3%    | 6.7%              | 57.9%       | 0.715 |  0.528 | 22.5%              | 18.0%         | 82.0%         | 0.0%             | 65.5%       |
-| ablation: Tier 0 only        | 96.3%            | 95.6%    | 4.4%              | 55.5%       | 0.702 |  0.528 | 8.5%               | 18.0%         | 0.0%          | 82.0%            | 65.1%       |
-| ablation: no S3 sketch probe | 91.9%            | 94.4%    | 5.6%              | 57.4%       | 0.714 |  0.516 | 18.3%              | 18.0%         | 60.2%         | 21.7%            | 65.9%       |
-| ablation: tau fixed 0.5      | 60.9%            | 72.2%    | 27.8%             | 66.3%       | 0.691 |  0.826 | 88.7%              | 18.0%         | 74.5%         | 7.5%             | 58.5%       |
-| variant: LightGBM Tier 1     | 95.7%            | 95.6%    | 4.4%              | 55.8%       | 0.705 |  0.522 | 9.9%               | 18.0%         | 48.4%         | 33.5%            | 65.1%       |
+| policy                       | retrieval_rate   | recall   | false_skip_rate   | precision   |    f1 |   cost | cost_vs_always          | savings_captured   | share_tier0   | share_tier1   | share_failopen   | depth_acc   |
+|:-----------------------------|:-----------------|:---------|:------------------|:------------|------:|-------:|:------------------------|:-------------------|:--------------|:--------------|:-----------------|:------------|
+| never                        | 0.0%             | 0.0%     | 100.0%            | 0.0%        | 0     |  2.236 | +1.795 [+1.438, +2.148] |                    | 0.0%          | 0.0%          | 0.0%             |             |
+| always                       | 100.0%           | 100.0%   | 0.0%              | 55.9%       | 0.717 |  0.441 | +0.000 [+0.000, +0.000] |                    | 0.0%          | 0.0%          | 0.0%             | 22.2%       |
+| oracle                       | 55.9%            | 100.0%   | 0.0%              | 100.0%      | 1     |  0     | -0.441 [-0.512, -0.370] |                    | 0.0%          | 0.0%          | 0.0%             | 100.0%      |
+| amic (T0+T1, band->SHALLOW)  | 92.5%            | 94.4%    | 5.6%              | 57.0%       | 0.711 |  0.522 | +0.081 [-0.025, +0.198] | 16.9%              | 18.0%         | 51.6%         | 30.4%            | 64.7%       |
+| amic, hard tau (no band)     | 90.1%            | 93.3%    | 6.7%              | 57.9%       | 0.715 |  0.528 | +0.087 [-0.025, +0.211] | 22.5%              | 18.0%         | 82.0%         | 0.0%             | 65.5%       |
+| ablation: Tier 0 only        | 96.3%            | 95.6%    | 4.4%              | 55.5%       | 0.702 |  0.528 | +0.087 [-0.006, +0.194] | 8.5%               | 18.0%         | 0.0%          | 82.0%            | 65.1%       |
+| ablation: no S3 sketch probe | 91.9%            | 94.4%    | 5.6%              | 57.4%       | 0.714 |  0.516 | +0.075 [-0.031, +0.190] | 18.3%              | 18.0%         | 60.2%         | 21.7%            | 65.9%       |
+| ablation: tau fixed 0.5      | 60.9%            | 72.2%    | 27.8%             | 66.3%       | 0.691 |  0.826 | +0.385 [+0.069, +0.699] | 88.7%              | 18.0%         | 74.5%         | 7.5%             | 58.5%       |
+| variant: LightGBM Tier 1     | 95.7%            | 95.6%    | 4.4%              | 55.8%       | 0.705 |  0.522 | +0.081 [-0.019, +0.194] | 9.9%               | 18.0%         | 48.4%         | 33.5%            | 65.1%       |
 
 ### LoCoMo (external check, n = 347; Tier 1 trained on the education set only)
 
 Category 5 (adversarial) is used as a weak memory-not-required analogue; reported separately and never pooled with the education results.
 
-| policy                       | retrieval_rate   | recall   | false_skip_rate   | precision   |   cost |
-|:-----------------------------|:-----------------|:---------|:------------------|:------------|-------:|
-| never                        | 0.0%             | 0.0%     | 100.0%            | 0.0%        |  3.112 |
-| always                       | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 |
-| oracle                       | 77.8%            | 100.0%   | 0.0%              | 100.0%      |  0     |
-| amic (T0+T1, band->SHALLOW)  | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 |
-| amic, hard tau (no band)     | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 |
-| ablation: Tier 0 only        | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 |
-| ablation: no S3 sketch probe | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 |
-| ablation: tau fixed 0.5      | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 |
-| variant: LightGBM Tier 1     | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 |
+| policy                       | retrieval_rate   | recall   | false_skip_rate   | precision   |   cost | cost_vs_always          |
+|:-----------------------------|:-----------------|:---------|:------------------|:------------|-------:|:------------------------|
+| never                        | 0.0%             | 0.0%     | 100.0%            | 0.0%        |  3.112 | +2.890 [+2.829, +2.945] |
+| always                       | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 | +0.000 [+0.000, +0.000] |
+| oracle                       | 77.8%            | 100.0%   | 0.0%              | 100.0%      |  0     | -0.222 [-0.234, -0.211] |
+| amic (T0+T1, band->SHALLOW)  | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 | +0.000 [+0.000, +0.000] |
+| amic, hard tau (no band)     | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 | +0.000 [+0.000, +0.000] |
+| ablation: Tier 0 only        | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 | +0.000 [+0.000, +0.000] |
+| ablation: no S3 sketch probe | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 | +0.000 [+0.000, +0.000] |
+| ablation: tau fixed 0.5      | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 | +0.000 [+0.000, +0.000] |
+| variant: LightGBM Tier 1     | 100.0%           | 100.0%   | 0.0%              | 77.8%       |  0.222 | +0.000 [+0.000, +0.000] |
 
 ## 3. Cost-sensitive thresholding: lambda sweep (test split)
 
@@ -71,11 +71,13 @@ Same calibrated Tier-1 model; only the threshold rule changes. Lower cost is bet
 
 ## 4. Tier-1 calibration (test split, rows Tier 0 abstains on)
 
-| model       |   n_test |   auc |   brier |   ece |
-|:------------|---------:|------:|--------:|------:|
-| tier1       |      132 | 0.671 |   0.237 | 0.116 |
-| tier1_no_s3 |      132 | 0.708 |   0.23  | 0.137 |
-| tier1_lgbm  |      132 | 0.682 |   0.221 | 0.039 |
+| model       |   n_test |   auc | auc_95ci_learner   |   brier |   ece |
+|:------------|---------:|------:|:-------------------|--------:|------:|
+| tier1       |      132 | 0.671 | [0.589, 0.757]     |   0.237 | 0.116 |
+| tier1_no_s3 |      132 | 0.708 | [0.632, 0.803]     |   0.23  | 0.137 |
+| tier1_lgbm  |      132 | 0.682 | [0.585, 0.778]     |   0.221 | 0.039 |
+
+AUC with the S3 sketch probe minus without it: -0.037 (95% CI -0.088 to +0.019, clustered by learner).
 
 ![reliability](fig_reliability.png)
 
@@ -160,16 +162,27 @@ C_emb cancels (both arms embed the query once; plan R1). Tier 2 and escalation a
 
 ## 7. Response quality: pairwise LLM judge vs `always` (test split)
 
-Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as ties without a judge call. Fabrication rates are over judged (non-identical) pairs.
+Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as ties without a judge call. Fabrication rates are over judged (non-identical) pairs. `net` = win rate minus loss rate (all seeds pooled) with 95% CIs clustered by probe (the 3 seeds of a probe move together) and by learner. 95% CIs are percentile bootstraps that resample whole clusters (fixed seed). The test split has only 8 learners, so learner-clustered intervals are approximate and probably too narrow.
 
-| run            |   n |   seeds | win          | tie          | loss         | identical_to_always   | fabricated (run)   | fabricated (always)   |
-|:---------------|----:|--------:|:-------------|:-------------|:-------------|:----------------------|:-------------------|:----------------------|
-| always_shallow | 483 |       3 | 42.7% ± 3.4% | 10.4% ± 2.9% | 47.0% ± 2.4% | 0.2%                  | 8.3%               | 7.3%                  |
-| amic           | 483 |       3 | 34.8% ± 2.7% | 23.6% ± 1.2% | 41.6% ± 1.9% | 16.4%                 | 6.9%               | 5.4%                  |
-| amic_lam1      | 483 |       3 | 27.3% ± 3.5% | 25.9% ± 2.5% | 46.8% ± 3.1% | 16.4%                 | 12.6%              | 5.0%                  |
-| amic_no_s3     | 483 |       3 | 34.0% ± 4.0% | 24.4% ± 4.0% | 41.6% ± 0.0% | 17.0%                 | 8.7%               | 5.7%                  |
-| never          | 483 |       3 | 15.1% ± 3.2% | 6.8% ± 1.1%  | 78.1% ± 4.2% | 0.0%                  | 28.8%              | 2.9%                  |
-| oracle         | 483 |       3 | 30.0% ± 1.6% | 21.5% ± 0.4% | 48.4% ± 1.2% | 12.6%                 | 10.9%              | 5.0%                  |
+| run            |   n |   seeds | win          | tie          | loss         | net (95% CI, probe)     | net (95% CI, learner)   | identical_to_always   | fabricated (run)   | fabricated (always)   |
+|:---------------|----:|--------:|:-------------|:-------------|:-------------|:------------------------|:------------------------|:----------------------|:-------------------|:----------------------|
+| always_shallow | 483 |       3 | 42.7% ± 3.4% | 10.4% ± 2.9% | 47.0% ± 2.4% | -4.3% [-13.3%, +4.6%]   | -4.3% [-11.7%, +3.1%]   | 0.2%                  | 8.3%               | 7.3%                  |
+| amic           | 483 |       3 | 34.8% ± 2.7% | 23.6% ± 1.2% | 41.6% ± 1.9% | -6.8% [-15.3%, +1.4%]   | -6.8% [-14.6%, +1.2%]   | 16.4%                 | 6.9%               | 5.4%                  |
+| amic_lam1      | 483 |       3 | 27.3% ± 3.5% | 25.9% ± 2.5% | 46.8% ± 3.1% | -19.5% [-28.2%, -11.0%] | -19.5% [-26.3%, -12.7%] | 16.4%                 | 12.6%              | 5.0%                  |
+| amic_no_s3     | 483 |       3 | 34.0% ± 4.0% | 24.4% ± 4.0% | 41.6% ± 0.0% | -7.7% [-15.7%, +0.4%]   | -7.7% [-12.3%, -2.5%]   | 17.0%                 | 8.7%               | 5.7%                  |
+| never          | 483 |       3 | 15.1% ± 3.2% | 6.8% ± 1.1%  | 78.1% ± 4.2% | -62.9% [-70.0%, -55.9%] | -62.9% [-67.5%, -58.0%] | 0.0%                  | 28.8%              | 2.9%                  |
+| oracle         | 483 |       3 | 30.0% ± 1.6% | 21.5% ± 0.4% | 48.4% ± 1.2% | -18.4% [-27.3%, -9.7%]  | -18.4% [-28.5%, -8.9%]  | 12.6%                 | 10.9%              | 5.0%                  |
+
+### Paired comparisons (same probes and seeds)
+
+`diff` = net win of the first run minus net win of the second, on the (probe, seed) pairs both runs answered. A difference counts as real only when BOTH its probe- and learner-clustered CIs exclude 0 (decision rule fixed before the extension runs; docs/PLAN.md).
+
+| comparison            |   pairs | diff (95% CI, probe)   | diff (95% CI, learner)   | both CIs exclude 0   |
+|:----------------------|--------:|:-----------------------|:-------------------------|:---------------------|
+| amic − always_shallow |     483 | -2.5% [-10.4%, +5.0%]  | -2.5% [-9.3%, +5.0%]     | no                   |
+| amic − amic_no_s3     |     483 | +0.8% [-5.4%, +7.0%]   | +0.8% [-4.6%, +6.9%]     | no                   |
+| amic_lam1 − amic      |     483 | -12.6% [-20.7%, -4.8%] | -12.6% [-20.5%, -3.1%]   | yes                  |
+| oracle − amic         |     483 | -11.6% [-21.3%, -1.4%] | -11.6% [-22.5%, -3.7%]   | yes                  |
 
 ### By the route each run chose (all seeds pooled)
 
@@ -196,12 +209,12 @@ Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as tie
 
 `net_win_vs_always` = pairwise win rate minus loss rate against `always` (DEEP every turn); 0 = as good as `always`. A run is better than another only if it uses fewer memory tokens **and** has a higher net win rate.
 
-| run            | retrieval_rate   |   memory_tokens | tokens_saved_vs_always   | net_win_vs_always   |
-|:---------------|:-----------------|----------------:|:-------------------------|:--------------------|
-| always         | 100.0%           |             800 | 0.0%                     | 0.0%                |
-| amic_no_s3     | 91.9%            |             369 | 53.9%                    | -7.7%               |
-| amic           | 92.5%            |             369 | 53.9%                    | -6.8%               |
-| always_shallow | 100.0%           |             314 | 60.7%                    | -4.3%               |
-| amic_lam1      | 60.9%            |             269 | 66.4%                    | -19.5%              |
-| oracle         | 55.9%            |             239 | 70.1%                    | -18.4%              |
-| never          | 0.0%             |               0 | 100.0%                   | -62.9%              |
+| run            | retrieval_rate   |   memory_tokens | tokens_saved_vs_always   | net_win_vs_always   | net_win_95ci_learner   |
+|:---------------|:-----------------|----------------:|:-------------------------|:--------------------|:-----------------------|
+| always         | 100.0%           |             800 | 0.0%                     | 0.0%                |                        |
+| amic_no_s3     | 91.9%            |             369 | 53.9%                    | -7.7%               | [-12.3%, -2.5%]        |
+| amic           | 92.5%            |             369 | 53.9%                    | -6.8%               | [-14.6%, +1.2%]        |
+| always_shallow | 100.0%           |             314 | 60.7%                    | -4.3%               | [-11.7%, +3.1%]        |
+| amic_lam1      | 60.9%            |             269 | 66.4%                    | -19.5%              | [-26.3%, -12.7%]       |
+| oracle         | 55.9%            |             239 | 70.1%                    | -18.4%              | [-28.5%, -8.9%]        |
+| never          | 0.0%             |               0 | 100.0%                   | -62.9%              | [-67.5%, -58.0%]       |

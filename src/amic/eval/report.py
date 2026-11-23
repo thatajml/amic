@@ -20,15 +20,37 @@ from amic.contracts.config import Settings, load_settings
 from amic.control.thresholds import tau_star
 from amic.control.tier1 import Tier1Model
 from amic.eval.replay import (
+    RETRIEVE,
     decision_metrics,
     fixed_policy,
     load_dataset,
     replay,
     savings_captured,
 )
+from amic.eval.stats import fmt_ci, mean_ci, net_win_ci, paired_diff_ci, stat_ci
 
 OUT = Path("docs/results")
 LAMBDAS = [1.0, 2.0, 4.0, 8.0, 16.0]
+CI_NOTE = (
+    "95% CIs are percentile bootstraps that resample whole clusters (fixed seed). The test split "
+    "has only 8 learners, so learner-clustered intervals are approximate and probably too narrow."
+)
+# Paired comparisons on the same (probe, seed) pairs; rows appear once both runs are judged.
+# The second block is the pre-registered set for the components added after the first results.
+PAIRS: list[tuple[str, str]] = [
+    ("amic", "always_shallow"),
+    ("amic", "amic_no_s3"),
+    ("amic_lam1", "amic"),
+    ("oracle", "amic"),
+    ("amic_esc", "amic"),
+    ("amic_lam1_esc", "amic_lam1"),
+    ("never_esc", "never"),
+    ("amic_esc", "never_esc"),
+    ("amic_full", "amic"),
+    ("always_m2", "always_shallow"),
+    ("amic_v2", "always_shallow"),
+    ("amic_v2", "amic"),
+]
 
 
 def _fmt(df: pd.DataFrame, pct: list[str] = (), dec: dict[str, int] | None = None) -> str:
@@ -81,12 +103,18 @@ def section_dataset() -> str:
         if len(m) >= 10:
             judge = m.label_required.astype(int)
             k = cohen_kappa_score(m.human_required, judge)
+            _, k_lo, k_hi = stat_ci(
+                m.assign(judge=judge),
+                "probe_id",
+                lambda d: cohen_kappa_score(d.human_required, d.judge),
+            )
             agree = (m.human_required == judge).mean()
             k_hi = cohen_kappa_score(m.human_required, m.intended_memory.astype(int))
             k_ji = cohen_kappa_score(df.intended_memory.astype(int), df.label_required.astype(int))
             lines += [
                 "",
-                f"Human vs judge labels (n={len(m)}): agreement {agree:.1%}, Cohen's kappa **{k:.3f}**. "
+                f"Human vs judge labels (n={len(m)}): agreement {agree:.1%}, Cohen's kappa **{k:.3f}** "
+                f"(95% CI {k_lo:.3f} to {k_hi:.3f}, bootstrap over probes). "
                 f"The judge marks memory as required more often than the human annotator "
                 f"({judge.mean():.0%} vs {m.human_required.mean():.0%} on the same probes). "
                 f"For reference, kappa human vs the generator's intended category = {k_hi:.3f}; "
@@ -115,20 +143,36 @@ VARIANTS: list[tuple[str, dict[str, Any], str]] = [
 ]
 
 
+def probe_costs(dec: pd.DataFrame, lam: float) -> pd.Series:
+    """Per-probe decision cost (false skip = lam, false retrieve = 1), indexed by probe_id."""
+    y = dec.label_required.astype(bool).to_numpy()
+    r = dec.route.isin(RETRIEVE).to_numpy()
+    cost = np.where(y & ~r, lam, np.where(~y & r, 1.0, 0.0))
+    return pd.Series(cost, index=dec.probe_id.to_numpy())
+
+
 def _decision_rows(df: pd.DataFrame, lam: float) -> pd.DataFrame:
-    rows = []
-    base = {n: decision_metrics(fixed_policy(df, n), lam) for n in ("never", "always", "oracle")}
-    for n in ("never", "always", "oracle"):
-        rows.append({"policy": n, **base[n]})
+    """Decision metrics per policy, plus its cost minus `always`'s (learner-clustered CI)."""
+    learners = df.set_index("probe_id").learner_id
+    decs = {n: fixed_policy(df, n) for n in ("never", "always", "oracle")}
+    base = {n: decision_metrics(d, lam) for n, d in decs.items()}
+    always_cost = probe_costs(decs["always"], lam)
+
+    def vs_always(dec: pd.DataFrame) -> str:
+        diff = probe_costs(dec, lam) - always_cost
+        return fmt_ci(*mean_ci(diff.to_numpy(), learners.reindex(diff.index).to_numpy()), pct=False)
+
+    rows = [{"policy": n, **base[n], "cost_vs_always": vs_always(decs[n])} for n in decs]
     for name, over, model in VARIANTS:
         if model and not Path(model).exists():
             continue
         s = load_settings(**over)
         s.gate.lam = lam
         t1 = Tier1Model.load(model) if model else None
-        m = decision_metrics(replay(df, s, t1), lam)
+        dec = replay(df, s, t1)
+        m = decision_metrics(dec, lam)
         m["savings_captured"] = savings_captured(m, base["always"], base["oracle"])
-        rows.append({"policy": name, **m})
+        rows.append({"policy": name, **m, "cost_vs_always": vs_always(dec)})
     return pd.DataFrame(rows)
 
 
@@ -147,6 +191,7 @@ def section_decisions() -> tuple[str, pd.DataFrame | None]:
         "precision",
         "f1",
         "cost",
+        "cost_vs_always",
         "savings_captured",
         "share_tier0",
         "share_tier1",
@@ -169,7 +214,9 @@ def section_decisions() -> tuple[str, pd.DataFrame | None]:
         "",
         f"lambda = {lam:g} (tau* = {tau_star(lam):.2f}); n = {len(test)} probes from held-out learners. "
         "`cost` = expected cost per query in units of one false retrieve (a false skip costs lambda). "
-        "`savings_captured` = share of the always->oracle retrieval reduction achieved.",
+        "`cost_vs_always` = the policy's cost minus `always`'s on the same probes, with a 95% CI "
+        "clustered by learner (positive = worse than retrieving every time). "
+        "`savings_captured` = share of the always->oracle retrieval reduction achieved. " + CI_NOTE,
         "",
         _fmt(t[cols], pct=pct, dec={"f1": 3, "cost": 3}),
     ]
@@ -185,7 +232,17 @@ def section_decisions() -> tuple[str, pd.DataFrame | None]:
             "separately and never pooled with the education results.",
             "",
             _fmt(
-                lt[["policy", "retrieval_rate", "recall", "false_skip_rate", "precision", "cost"]],
+                lt[
+                    [
+                        "policy",
+                        "retrieval_rate",
+                        "recall",
+                        "false_skip_rate",
+                        "precision",
+                        "cost",
+                        "cost_vs_always",
+                    ]
+                ],
                 pct=["retrieval_rate", "recall", "false_skip_rate", "precision"],
                 dec={"cost": 3},
             ),
@@ -255,21 +312,42 @@ def section_calibration() -> str:
     p = Path("runs/tier1.json")
     if not p.exists():
         return ""
+    from sklearn.metrics import roc_auc_score
+
     r = json.loads(p.read_text())
+    # Per-row test predictions (the same rows train_tier1.py evaluates) for AUC intervals.
+    df = load_dataset("edu")
+    test = df[(df.split == "test") & (df.tier0_rule == "abstain")].reset_index(drop=True)
+    frame = test[["probe_id", "learner_id", "label_required"]].copy()
+    names = [n for n in ("tier1", "tier1_no_s3", "tier1_lgbm") if Path(f"runs/{n}.json").exists()]
+    for name in names:
+        model = Tier1Model.load(f"models/{name}.joblib")
+        frame[f"p_{name}"] = model.predict_many(test[model.features].to_numpy(np.float32))[0]
+
+    def auc(d: pd.DataFrame, name: str) -> float:
+        return float(roc_auc_score(d.label_required.astype(int), d[f"p_{name}"]))
+
     rows = []
-    for name in ("tier1", "tier1_no_s3", "tier1_lgbm"):
-        q = Path(f"runs/{name}.json")
-        if q.exists():
-            j = json.loads(q.read_text())["test"]
-            rows.append(
-                {
-                    "model": name,
-                    "n_test": j["n"],
-                    "auc": j["auc"],
-                    "brier": j["brier"],
-                    "ece": j["ece"],
-                }
-            )
+    for name in names:
+        j = json.loads(Path(f"runs/{name}.json").read_text())["test"]
+        _, lo, hi = stat_ci(frame, "learner_id", lambda d, n=name: auc(d, n))
+        rows.append(
+            {
+                "model": name,
+                "n_test": j["n"],
+                "auc": j["auc"],
+                "auc_95ci_learner": f"[{lo:.3f}, {hi:.3f}]",
+                "brier": j["brier"],
+                "ece": j["ece"],
+            }
+        )
+    diff_line = ""
+    if {"tier1", "tier1_no_s3"} <= set(names):
+        d, lo, hi = stat_ci(frame, "learner_id", lambda x: auc(x, "tier1") - auc(x, "tier1_no_s3"))
+        diff_line = (
+            f"AUC with the S3 sketch probe minus without it: {d:+.3f} "
+            f"(95% CI {lo:+.3f} to {hi:+.3f}, clustered by learner)."
+        )
     rel = pd.DataFrame(r["test"]["reliability"])
     _plot_reliability(rel)
     coef = list(r.get("coef", {}).items())[:8]
@@ -279,6 +357,8 @@ def section_calibration() -> str:
                 "## 4. Tier-1 calibration (test split, rows Tier 0 abstains on)",
                 "",
                 _fmt(pd.DataFrame(rows), dec={"auc": 3, "brier": 3, "ece": 3}),
+                "",
+                diff_line,
                 "",
                 "![reliability](fig_reliability.png)",
                 "",
@@ -474,6 +554,37 @@ def section_breakeven(tr: pd.DataFrame | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _pairwise(run: str) -> pd.DataFrame | None:
+    p = Path("runs") / run / "pairwise_vs_always.jsonl"
+    if not p.exists():
+        return None
+    pw = pd.read_json(p, lines=True)
+    return None if pw.empty else pw
+
+
+def _paired_rows() -> pd.DataFrame | None:
+    rows = []
+    for a, b in PAIRS:
+        pa, pb = _pairwise(a), _pairwise(b)
+        if pa is None or pb is None:
+            continue
+        d, lo, hi, n = paired_diff_ci(pa, pb, "learner")
+        _, plo, phi, _ = paired_diff_ci(pa, pb, "probe")
+        rows.append(
+            {
+                "comparison": f"{a} − {b}",
+                "pairs": n,
+                "diff (95% CI, probe)": fmt_ci(d, plo, phi),
+                "diff (95% CI, learner)": fmt_ci(d, lo, hi),
+                # conservative: both clusterings must agree (8 learners undercover on their own)
+                "both CIs exclude 0": (
+                    "yes" if (lo > 0 and plo > 0) or (hi < 0 and phi < 0) else "no"
+                ),
+            }
+        )
+    return pd.DataFrame(rows) if rows else None
+
+
 def section_quality() -> str:
     rows = []
     for d in sorted(Path("runs").glob("*/pairwise_vs_always.jsonl")):
@@ -493,6 +604,8 @@ def section_quality() -> str:
                 "win": f"{per_seed.win.mean():.1%} ± {per_seed.win.std(ddof=1) if len(per_seed) > 1 else 0:.1%}",
                 "tie": f"{per_seed.tie.mean():.1%} ± {per_seed.tie.std(ddof=1) if len(per_seed) > 1 else 0:.1%}",
                 "loss": f"{per_seed.loss.mean():.1%} ± {per_seed.loss.std(ddof=1) if len(per_seed) > 1 else 0:.1%}",
+                "net (95% CI, probe)": fmt_ci(*net_win_ci(pw, "probe")),
+                "net (95% CI, learner)": fmt_ci(*net_win_ci(pw, "learner")),
                 "identical_to_always": f"{pw.identical.mean():.1%}",
                 "fabricated (run)": f"{judged.fab_run.mean():.1%}" if len(judged) else "",
                 "fabricated (always)": f"{judged.fab_base.mean():.1%}" if len(judged) else "",
@@ -522,10 +635,25 @@ def section_quality() -> str:
         "## 7. Response quality: pairwise LLM judge vs `always` (test split)",
         "",
         "Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as ties without a "
-        "judge call. Fabrication rates are over judged (non-identical) pairs.",
+        "judge call. Fabrication rates are over judged (non-identical) pairs. `net` = win rate "
+        "minus loss rate (all seeds pooled) with 95% CIs clustered by probe (the 3 seeds of a "
+        "probe move together) and by learner. " + CI_NOTE,
         "",
         pd.DataFrame(rows).to_markdown(index=False),
     ]
+    paired = _paired_rows()
+    if paired is not None:
+        lines += [
+            "",
+            "### Paired comparisons (same probes and seeds)",
+            "",
+            "`diff` = net win of the first run minus net win of the second, on the (probe, seed) "
+            "pairs both runs answered. A difference counts as real only when BOTH its probe- and "
+            "learner-clustered CIs exclude 0 (decision rule fixed before the extension runs; "
+            "docs/PLAN.md).",
+            "",
+            paired.to_markdown(index=False),
+        ]
     if by_route:
         lines += [
             "",
@@ -549,12 +677,11 @@ def section_summary(tr: pd.DataFrame | None) -> str:
     base_mem = tr[tr.arm == "always"].memory_tokens.mean()
     rows = []
     for arm, g in tr.groupby("arm"):
-        p = Path("runs") / str(arm) / "pairwise_vs_always.jsonl"
-        net = None
-        if p.exists():
-            pw = pd.read_json(p, lines=True)
-            if not pw.empty:
-                net = (pw.result == "win").mean() - (pw.result == "loss").mean()
+        pw = _pairwise(str(arm))
+        net, ci = None, ""
+        if pw is not None:
+            net, lo, hi = net_win_ci(pw, "learner")
+            ci = f"[{100 * lo:+.1f}%, {100 * hi:+.1f}%]"
         rows.append(
             {
                 "run": arm,
@@ -562,6 +689,7 @@ def section_summary(tr: pd.DataFrame | None) -> str:
                 "memory_tokens": g.memory_tokens.mean(),
                 "tokens_saved_vs_always": 1 - g.memory_tokens.mean() / base_mem,
                 "net_win_vs_always": 0.0 if arm == "always" else net,
+                "net_win_95ci_learner": ci,
             }
         )
     t = pd.DataFrame(rows).sort_values("memory_tokens", ascending=False)

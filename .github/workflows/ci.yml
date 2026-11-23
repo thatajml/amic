@@ -17,7 +17,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[gate,eval,dev]"
+          pip install -e ".[gate,eval,dev,llm-hosted]"   # llm-hosted: openai (judge/quota tests)
       - name: Lint
         run: ruff check src tests scripts && ruff format --check src tests scripts
       - name: Tests (fakes at the edges; no Ollama, Redis or model downloads)
