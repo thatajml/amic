@@ -1,0 +1,89 @@
+# The whole AMIC stack in one command:   docker compose up -d
+#   API        http://localhost:8080   (docs at /docs)
+#   Dashboard  http://localhost:8501
+#   Chat       docker compose run --rm chat [--learner me] [--frozen]
+#   Stop       docker compose down
+#
+# Requirement: Ollama running on the host (the Windows app) with the models pulled
+# (`ollama pull llama3.1:8b`). Containers reach it at host.docker.internal:11434.
+# Settings come from .env as usual; data/, models/ and configs/ are shared with the host.
+name: amic
+
+x-app: &app
+  build: .
+  image: amic:latest
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    AMIC_MODELS__OLLAMA_BASE_URL: http://host.docker.internal:11434
+    AMIC_REDIS_URL: redis://redis:6379/0
+    AMIC_CHROMA_HOST: chroma
+    AMIC_CHROMA_PORT: "8000"
+    AMIC_TELEMETRY__SHADOW_BASELINE: "true"   # feeds the dashboard's savings view
+  volumes:
+    - ./data:/app/data
+    - ./models:/app/models
+    - ./configs:/app/configs
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    - redis
+    - chroma
+
+services:
+  api:
+    <<: *app
+    command: ["uvicorn", "amic.service.api:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports: ["127.0.0.1:8080:8080"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+  dashboard:
+    <<: *app
+    command: ["streamlit", "run", "ui/dashboard.py", "--server.port", "8501",
+              "--server.address", "0.0.0.0", "--server.headless", "true",
+              "--browser.gatherUsageStats", "false"]
+    ports: ["127.0.0.1:8501:8501"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8501/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # Terminal chat, on demand only: docker compose run --rm chat
+  chat:
+    <<: *app
+    entrypoint: ["python", "-m", "amic.demo"]
+    stdin_open: true
+    tty: true
+    profiles: ["chat"]
+
+  # Same services and volumes as docker-compose.dev.yml (same project name), so either file
+  # manages the one Redis / Chroma. Used when session_backend=redis or chroma_client=http.
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+
+  chroma:
+    image: chromadb/chroma:1.5.9
+    ports: ["8000:8000"]
+    volumes: [chroma-data:/data]
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  chroma-data:

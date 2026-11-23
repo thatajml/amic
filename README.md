@@ -35,7 +35,34 @@ It records the choice as `AMIC_ENV` in `.env`, and `start-amic.cmd` and `chat-am
 conda). `AMIC_PYTHON=<path>` overrides all of these. To work in a shell, run `conda activate amic`.
 `conda env create -f environment.yml` also works, but on Windows it installs CPU-only torch.
 
-## Run the whole stack
+## Run with Docker (one command)
+
+**Requirements**
+
+- **Docker Desktop**, running.
+- **Ollama on the host** (the Windows app), running, with the tutor model pulled:
+  `ollama pull llama3.1:8b`. The LLM is not containerised. The containers call this Ollama at
+  `host.docker.internal:11434`, so it keeps using your GPU and the models you already downloaded.
+  Ollama's default settings work. You don't need to change `OLLAMA_HOST`.
+- A `.env` file (`copy .env.example .env`). The containers read the same settings as a local run.
+
+```bat
+docker compose up -d                 :: build once, then API :8080, dashboard :8501, Redis, Chroma
+docker compose run --rm chat         :: terminal chat (same options as chat-amic.cmd, e.g. --frozen)
+docker compose down                  :: stop everything
+docker compose up -d --build         :: rebuild after changing code
+```
+
+`data/`, `models/` and `configs/` are shared with the host, so traces, memory, the trained Tier-1
+model and the dashboard are the same as in a local run. The image uses CPU-only torch, because
+it only embeds queries, and has the embedding model built in. It is about 3.4 GB. The services
+restart with Docker Desktop. Don't run this and `start-amic.cmd` at the same time, because both
+use ports 8080 and 8501.
+
+Run `docker compose` from a normal Windows terminal (PowerShell or cmd). From Git Bash, a
+lowercase `/c/...` path can make the build stop with `additional privileges requested`.
+
+## Run without Docker
 
 ```bat
 start-amic.cmd              :: Ollama (+ tutor model preloaded), API on :8080, dashboard on :8501
