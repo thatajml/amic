@@ -500,19 +500,46 @@ def section_quality() -> str:
         )
     if not rows:
         return ""
-    return (
-        "\n".join(
-            [
-                "## 7. Response quality: pairwise LLM judge vs `always` (test split)",
-                "",
-                "Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as ties without a "
-                "judge call. Fabrication rates are over judged (non-identical) pairs.",
-                "",
-                pd.DataFrame(rows).to_markdown(index=False),
-            ]
-        )
-        + "\n"
-    )
+    by_route = []
+    for d in sorted(Path("runs").glob("*/pairwise_vs_always.jsonl")):
+        pw = pd.read_json(d, lines=True)
+        if pw.empty or "route" not in pw:
+            continue
+        for route, g in pw.groupby("route"):
+            vc = g.result.value_counts(normalize=True)
+            by_route.append(
+                {
+                    "run": d.parent.name,
+                    "route chosen": route,
+                    "n": len(g),
+                    "win": vc.get("win", 0.0),
+                    "tie": vc.get("tie", 0.0),
+                    "loss": vc.get("loss", 0.0),
+                    "identical_to_always": g.identical.mean(),
+                }
+            )
+    lines = [
+        "## 7. Response quality: pairwise LLM judge vs `always` (test split)",
+        "",
+        "Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as ties without a "
+        "judge call. Fabrication rates are over judged (non-identical) pairs.",
+        "",
+        pd.DataFrame(rows).to_markdown(index=False),
+    ]
+    if by_route:
+        lines += [
+            "",
+            "### By the route each run chose (all seeds pooled)",
+            "",
+            "`always` routes every query DEEP, so a DEEP choice reproduces its answer (tie). The "
+            "SHALLOW and SKIP rows are where the runs differ from `always`.",
+            "",
+            _fmt(
+                pd.DataFrame(by_route),
+                pct=["win", "tie", "loss", "identical_to_always"],
+            ),
+        ]
+    return "\n".join(lines) + "\n"
 
 
 def main() -> None:

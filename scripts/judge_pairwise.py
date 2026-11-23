@@ -122,13 +122,13 @@ def main() -> None:
                 a=ra,
                 b=rb,
             )
+            raw = ""
             for _ in range(3):
                 try:
-                    j = json.loads(
-                        llm.chat(
-                            [{"role": "user", "content": prompt}], json_mode=True, max_tokens=300
-                        ).text
-                    )
+                    raw = llm.chat(
+                        [{"role": "user", "content": prompt}], json_mode=True, max_tokens=1024
+                    ).text
+                    j = json.loads(raw)
                     if isinstance(j, list) and len(j) == 1 and isinstance(j[0], dict):
                         j = j[0]  # the judge occasionally wraps its object in a list
                     w = str(j["winner"]).strip().upper()
@@ -138,7 +138,7 @@ def main() -> None:
                 except (ValueError, KeyError, TypeError):
                     continue
             else:
-                raise RuntimeError(f"{run} {pid}: unparseable")
+                raise RuntimeError(f"{run} {pid}: unparseable: {raw[:300]!r}")
             result = "tie" if w == "TIE" else ("win" if (w == "A") == run_is_a else "loss")
             fa, fb = bool(j.get("fabricated_A")), bool(j.get("fabricated_B"))
             return {
