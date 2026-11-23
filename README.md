@@ -35,6 +35,24 @@ It records the choice as `AMIC_ENV` in `.env`, and `start-amic.cmd` and `chat-am
 conda). `AMIC_PYTHON=<path>` overrides all of these. To work in a shell, run `conda activate amic`.
 `conda env create -f environment.yml` also works, but on Windows it installs CPU-only torch.
 
+## Configuration
+
+Defaults live in [src/amic/contracts/config.py](src/amic/contracts/config.py). Change them in
+`.env` (start with `copy .env.example .env`, which lists every setting) or with environment
+variables:
+
+- The app reads only `AMIC_*` names. Nested settings use `__`: `AMIC_MODELS__TUTOR=llama3.2:3b`
+  sets `models.tutor`, and `AMIC_GATE__LAM=4.0` sets `gate.lam`. A name without the prefix, such
+  as `LLM_MODEL`, is ignored.
+- `GEMINI_API_KEY` is the exception: the judge reads it by that name. Only the offline
+  evaluation needs it.
+- `configs/base.yaml` and `configs/ablations/*.yaml` are experiment configs, passed with
+  `--config` to `python -m amic.eval.runner` and `python -m amic.demo`. A YAML file outranks
+  `.env`. The API and dashboard don't read these files.
+- `configs/pricing.yaml` holds the per-model prices the dashboard uses.
+- Under Docker, `docker-compose.yml` sets the Ollama URL, the Redis and Chroma hosts and the
+  shadow baseline for the containers. Those values override `.env`.
+
 ## Run with Docker (one command)
 
 **Requirements**
@@ -44,7 +62,8 @@ conda). `AMIC_PYTHON=<path>` overrides all of these. To work in a shell, run `co
   `ollama pull llama3.1:8b`. The LLM is not containerised. The containers call this Ollama at
   `host.docker.internal:11434`, so it keeps using your GPU and the models you already downloaded.
   Ollama's default settings work. You don't need to change `OLLAMA_HOST`.
-- A `.env` file (`copy .env.example .env`). The containers read the same settings as a local run.
+- A `.env` file (`copy .env.example .env`, see [Configuration](#configuration)). The containers
+  read the same settings as a local run.
 
 ```bat
 docker compose up -d                 :: build once, then API :8080, dashboard :8501, Redis, Chroma
