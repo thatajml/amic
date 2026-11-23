@@ -22,6 +22,8 @@ def test_chat_health_and_background_write(comps):
         assert body["decision"]["route"] == "DEEP" and body["trace_id"]
         # TestClient runs background tasks before returning: the turn is now in M1
         assert comps.episodic.count("zoe") == 1
+        summary = client.get("/learners/zoe").json()
+        assert summary["episodes"] == 1 and summary["profile"] and summary["mem_version"] > 0
         r2 = client.post(
             "/chat",
             json={"tenant_id": "zoe", "session_id": "s1", "query": "and a set?", "arm": "never"},

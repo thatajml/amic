@@ -82,6 +82,19 @@ def create_app(comps: Components | None = None) -> FastAPI:
             raise HTTPException(501, "telemetry backend cannot be queried")
         return tel.fetch(limit=limit, arm=arm)  # type: ignore[no-any-return]
 
+    @app.get("/learners/{tenant_id}")
+    def learner(tenant_id: str) -> dict[str, object]:
+        """What long-term memory holds for one learner (counts only; the Educator Console shows
+        the content). Lets clients and tests observe the async consolidation."""
+        c = _comps()
+        prof = c.profiles.get(tenant_id) if c.profiles is not None else None
+        return {
+            "episodes": c.episodic.count(tenant_id),
+            "facts": c.semantic.count(tenant_id) if c.semantic is not None else 0,
+            "profile": prof is not None,
+            "mem_version": c.sessions.mem_version(tenant_id),
+        }
+
     @app.delete("/learners/{tenant_id}")
     def erase(tenant_id: str) -> dict[str, int]:
         """Per-learner erasure (synchronous by design, plan R6)."""

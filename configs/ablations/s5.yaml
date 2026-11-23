@@ -1,0 +1,8 @@
+# S5 uncertainty signal (brief 6.1; pre-registered S1): a 16-token logprob draft from the local
+# tutor model on every request Tier 1 sees, with a Tier 1 trained on the S5 features
+# (python scripts/extract_s5.py && python scripts/train_tier1.py --s5 --name tier1_s5).
+ablation:
+  use_s5: true
+gate:
+  s5_tokens: 16
+  tier1_artifact: models/tier1_s5.joblib

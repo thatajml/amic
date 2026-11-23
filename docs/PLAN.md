@@ -34,10 +34,17 @@ The design degrades cleanly to Tier 0 + Tier 1 (§10), so cutting these needed n
 
 **Update 2026-11-23:** built afterwards as a pre-registered extension (section 9): M2 facts with
 validity intervals, the async write path (SQLite / Redis Streams queue + ConsolidationWorker), the
-DecisionCache, verify-and-escalate, Tier 2 + distillation buffer, and LongMemEval. Still future
-work: the M3 learner profile, cross-encoder rerank and entity hop in DEEP, the ForgettingManager
-beyond per-learner erasure, the Educator Console, and the docker-compose app (on the
-`dashboard-and-startup-command` branch, not merged).
+DecisionCache, verify-and-escalate, Tier 2 + distillation buffer, and LongMemEval.
+
+**Update 2026-11-23 (evening), section 10:** the rest of the brief: the M3 learner profile (EWMA
+mastery, updated by the worker), the brief's SHALLOW (M3 + top M2 facts) and DEEP (M1 + M2 + M3,
+MMR, cross-encoder rerank, one entity hop) routes, the WRITE route (`/remember`, `/forget`), the
+ForgettingManager (decay, TTL, compaction, erasure), the S5 uncertainty signal, the Tier-1
+distillation retrain, scheduled jobs (`python -m amic.jobs`), shadow mode against `always`, the
+Educator Console (`ui/educator.py`), performance-budget tests, the CI gate-metric regression
+check and real-Redis tests in CI. Not on `main`: the docker-compose app and usage dashboard
+(`dashboard-and-startup-command`) and the chat UI / Decision Inspector (`ui-chat`), both on
+unmerged branches by the owner's choice.
 
 **Key efficiency idea:** gate decisions can be **replayed offline**. Once each query's
 FeatureVector, oracle label and per-arm cost are logged, every ablation and λ sweep on *decision*

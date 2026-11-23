@@ -11,9 +11,11 @@ example profile.
 
 from __future__ import annotations
 
+import json
 import sys
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from amic.app import build_components
 from amic.contracts.config import Settings
@@ -48,6 +50,15 @@ def main() -> None:
             prof.updated = datetime.now(UTC).timestamp()
         c.profiles.put(prof)
         n_tok.append(len(prof.render(s.routes.profile_tokens)) / 4)
+    summary = {
+        "profiles": len(learners),
+        "facts_replayed": n_facts,
+        "alpha": s.profile.ewma_alpha,
+        "block_tokens_mean": sum(n_tok) / len(n_tok),
+        "block_tokens_max": max(n_tok),
+        "budget": s.routes.profile_tokens,
+    }
+    Path("runs/profiles_build.json").write_text(json.dumps(summary, indent=2))
     print(
         f"profiles={len(learners)} facts_replayed={n_facts} "
         f"block_tokens mean={sum(n_tok) / len(n_tok):.0f} max={max(n_tok):.0f} -> {s.profile.db}"

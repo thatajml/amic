@@ -50,6 +50,10 @@ PAIRS: list[tuple[str, str]] = [
     ("always_m2", "always_shallow"),
     ("amic_v2", "always_shallow"),
     ("amic_v2", "amic"),
+    ("always_m3", "always_shallow"),
+    ("amic_v3", "always_shallow"),
+    ("amic_v3", "amic"),
+    ("amic_v3", "amic_v2"),
 ]
 
 
@@ -1099,6 +1103,155 @@ def section_memory_system() -> str:
     return "\n".join([title, "", *lines]) + "\n"
 
 
+def section_completion(tr: pd.DataFrame | None) -> str:
+    """Section 10 of docs/PLAN.md: M3 + the brief's routes (P1, D1, V3), S5 (S1), distillation
+    (DS1), performance budgets (PB1), scheduled jobs."""
+    lines: list[str] = []
+    prof = Path("runs/profiles_build.json")
+    if prof.exists():
+        j = json.loads(prof.read_text())
+        lines += [
+            "### M3 learner profiles",
+            "",
+            f"{j['profiles']} profiles rebuilt from the frozen histories and their "
+            f"{j['facts_replayed']} extracted facts (`scripts/build_profiles.py`, no LLM): EWMA "
+            f"mastery per concept (alpha {j['alpha']}), open misconceptions, latest goal / project "
+            f"/ preference. Rendered block: {j['block_tokens_mean']:.0f} tokens on average "
+            f"(max {j['block_tokens_max']:.0f}; budget {j['budget']}).",
+            "",
+        ]
+    rows = []
+    for run, ref, rid in (
+        ("always_m3", "always_shallow", "P1"),
+        ("always_deep2", "always", "D1"),
+        ("amic_v3", "always", "V3"),
+        ("amic_v3", "always_shallow", "V3"),
+    ):
+        pa = _pairwise(run)
+        if pa is None:
+            continue
+        if ref == "always":  # judged against always directly: the net win is the difference
+            d, lo, hi = net_win_ci(pa, "learner")
+            _, plo, phi = net_win_ci(pa, "probe")
+            n = len(pa)
+        else:
+            pb = _pairwise(ref)
+            if pb is None:
+                continue
+            d, lo, hi, n = paired_diff_ci(pa, pb, "learner")
+            _, plo, phi, _ = paired_diff_ci(pa, pb, "probe")
+        mem = ""
+        if tr is not None and run in set(tr.arm) and ref in set(tr.arm):
+            mem = (
+                f"{tr[tr.arm == run].memory_tokens.mean():.0f} vs "
+                f"{tr[tr.arm == ref].memory_tokens.mean():.0f}"
+            )
+        rows.append(
+            {
+                "ID": rid,
+                "comparison": f"{run} − {ref}",
+                "pairs": n,
+                "net-win diff (95% CI, probe)": fmt_ci(d, plo, phi),
+                "net-win diff (95% CI, learner)": fmt_ci(d, lo, hi),
+                "both CIs exclude 0": (
+                    "yes" if (lo > 0 and plo > 0) or (hi < 0 and phi < 0) else "no"
+                ),
+                "memory tokens": mem,
+            }
+        )
+    if rows:
+        lines += [
+            "### The brief's routes: M3 + facts on SHALLOW, rerank + hop on DEEP (P1, D1, V3)",
+            "",
+            "`always_m3` = SHALLOW every turn with the brief's SHALLOW (M3 profile block + top-3 "
+            "M2 facts); `always_deep2` = DEEP every turn with the brief's DEEP (M1 + M2 + M3 "
+            "pool, one entity hop, cross-encoder rerank, MMR); `amic_v3` = the full gate (Tier "
+            "0-2, cache, verify-and-escalate) over those two routes.",
+            "",
+            _fmt(pd.DataFrame(rows)),
+            "",
+        ]
+        if tr is not None:
+            lat = []
+            for arm in ("always_shallow", "always_m3", "always", "always_deep2", "amic_v3"):
+                g = tr[tr.arm == arm]
+                if len(g):
+                    lat.append(
+                        {
+                            "run": arm,
+                            "retrieval ms p50": g["lat_retrieval"].median()
+                            if "lat_retrieval" in g
+                            else float("nan"),
+                            "retrieval ms p95": g["lat_retrieval"].quantile(0.95)
+                            if "lat_retrieval" in g
+                            else float("nan"),
+                            "memory tokens": g.memory_tokens.mean(),
+                        }
+                    )
+            if lat:
+                lines += [
+                    "Retrieval cost of the routes (live traces; rerank on CPU):",
+                    "",
+                    _fmt(
+                        pd.DataFrame(lat),
+                        dec={"retrieval ms p50": 1, "retrieval ms p95": 1, "memory tokens": 0},
+                    ),
+                    "",
+                ]
+    tv = Path("runs/tier1_variants.json")
+    if tv.exists():
+        j = json.loads(tv.read_text())
+        base = j.get("base", "tier1")
+        rows = []
+        for name, r in j.items():
+            if not isinstance(r, dict) or name == base or "auc_diff_ci_probe" not in r:
+                continue
+            al, ap = r["auc_diff_ci_learner"], r["auc_diff_ci_probe"]
+            cl, cp = r["cost_diff_ci_learner"], r["cost_diff_ci_probe"]
+            rows.append(
+                {
+                    "variant": name,
+                    "test AUC": r["auc"],
+                    "AUC diff (95% CI, probe)": fmt_ci(ap[0], ap[1], ap[2], pct=False),
+                    "AUC diff (95% CI, learner)": fmt_ci(al[0], al[1], al[2], pct=False),
+                    "cost": r["cost"],
+                    "cost diff (95% CI, probe)": fmt_ci(cp[0], cp[1], cp[2], pct=False),
+                    "cost diff (95% CI, learner)": fmt_ci(cl[0], cl[1], cl[2], pct=False),
+                    "retrieval": r["retrieval_rate"],
+                }
+            )
+        if rows:
+            b = j[base]
+            lines += [
+                "### Tier-1 variants: S5 uncertainty, distillation from Tier 2 (S1, DS1)",
+                "",
+                f"Offline, education test split. Base `{base}`: test AUC {b['auc']:.3f}, expected "
+                f"cost {b['cost']:.3f} at lambda = {j['lam']:g}. AUC on the rows Tier 1 sees; "
+                "cost from the full gate replayed on every test row. A variant helps only if "
+                "both CIs exclude 0.",
+                "",
+                _fmt(
+                    pd.DataFrame(rows),
+                    pct=["retrieval"],
+                    dec={"test AUC": 3, "cost": 3},
+                ),
+                "",
+            ]
+    pb = Path("runs/perf_budgets.json")
+    if pb.exists():
+        j = json.loads(pb.read_text())
+        lines += [
+            "### Performance budgets (PB1; dev laptop, `scripts/bench_gate.py`)",
+            "",
+            _fmt(pd.DataFrame(j["rows"]), dec={"p50 ms": 3, "p95 ms": 3, "budget ms": 2}),
+            "",
+        ]
+    if not lines:
+        return ""
+    title = "## 13. Completing the brief: M3, the brief's routes, S5, distillation, budgets"
+    return "\n".join([title, "", *lines]) + "\n"
+
+
 def section_summary(tr: pd.DataFrame | None) -> str:
     """Token use vs quality for every live run, side by side (the efficiency/quality frontier)."""
     if tr is None or "always" not in set(tr.arm):
@@ -1166,6 +1319,7 @@ def main() -> None:
     parts.append(section_tier2())
     parts.append(section_longmemeval())
     parts.append(section_memory_system())
+    parts.append(section_completion(tr))
     md = "\n".join(p for p in parts if p)
     (OUT / "main.md").write_text(md, encoding="utf-8")
     print(md)

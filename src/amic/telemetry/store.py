@@ -105,11 +105,17 @@ class SqliteTelemetry:
             conn.execute(insert(traces).values(**_row(trace)))
 
     def fetch(
-        self, limit: int = 100, arm: str | None = None, since: datetime | None = None
+        self,
+        limit: int = 100,
+        arm: str | None = None,
+        since: datetime | None = None,
+        tenant_id: str | None = None,
     ) -> list[DecisionTrace]:
         q = select(traces).order_by(traces.c.ts.desc()).limit(limit)
         if arm:
             q = q.where(traces.c.arm == arm)
+        if tenant_id:
+            q = q.where(traces.c.tenant_id == tenant_id)
         if since:
             q = q.where(traces.c.ts >= since)
         with self.engine.connect() as conn:
@@ -130,3 +136,19 @@ class InMemoryTelemetry:
 
     def record(self, trace: DecisionTrace) -> None:
         self.traces.append(trace)
+
+    def fetch(
+        self,
+        limit: int = 100,
+        arm: str | None = None,
+        since: datetime | None = None,
+        tenant_id: str | None = None,
+    ) -> list[DecisionTrace]:
+        out = [
+            t
+            for t in reversed(self.traces)
+            if (arm is None or t.arm == arm)
+            and (since is None or t.ts >= since)
+            and (tenant_id is None or t.tenant_id == tenant_id)
+        ]
+        return out[:limit]
