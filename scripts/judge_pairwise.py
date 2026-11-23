@@ -129,6 +129,8 @@ def main() -> None:
                             [{"role": "user", "content": prompt}], json_mode=True, max_tokens=300
                         ).text
                     )
+                    if isinstance(j, list) and len(j) == 1 and isinstance(j[0], dict):
+                        j = j[0]  # the judge occasionally wraps its object in a list
                     w = str(j["winner"]).strip().upper()
                     if w not in {"A", "B", "TIE"}:
                         raise ValueError(w)

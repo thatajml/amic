@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -47,6 +48,16 @@ def daily_quota_retry_after(e: BaseException) -> float | None:
     return (reset - now).total_seconds()
 
 
+def _keys_from_env(name: str) -> list[str]:
+    """`NAME`, then `NAME_2`, `NAME_3`, ... in order, skipping blanks and duplicates."""
+    keys: list[str] = []
+    for var in [name] + [f"{name}_{i}" for i in range(2, 10)]:
+        k = (os.environ.get(var) or "").strip()
+        if k and k not in keys:
+            keys.append(k)
+    return keys
+
+
 def _transient(e: BaseException) -> bool:
     import openai
 
@@ -71,11 +82,17 @@ class OpenAICompatGateway:
     ) -> None:
         from openai import OpenAI
 
-        key = api_key or os.environ.get(api_key_env)
-        if not key:
+        keys = [api_key] if api_key else _keys_from_env(api_key_env)
+        if not keys:
             raise RuntimeError(f"{api_key_env} is not set (put it in .env)")
         self.model = model
-        self._client = OpenAI(base_url=base_url, api_key=key, timeout=timeout_s, max_retries=0)
+        # Extra keys (GEMINI_API_KEY_2, _3, ...) are used in order once a key's daily cap is
+        # spent. Free-tier quota is per Google Cloud project, so each must be from another project.
+        self._clients = [
+            OpenAI(base_url=base_url, api_key=k, timeout=timeout_s, max_retries=0) for k in keys
+        ]
+        self._active = 0
+        self._lock = threading.Lock()
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._reasoning = reasoning_effort
@@ -102,20 +119,34 @@ class OpenAICompatGateway:
         kwargs: dict[str, object] = {}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        try:
-            r = self._client.chat.completions.create(  # type: ignore[call-overload]
-                model=self.model,
-                messages=messages,  # type: ignore[arg-type]
-                max_tokens=max_tokens or self._max_tokens,
-                temperature=self._temperature if temperature is None else temperature,
-                extra_body=extra or None,
-                **kwargs,  # type: ignore[arg-type]
-            )
-        except Exception as e:
-            wait = daily_quota_retry_after(e)
-            if wait is not None:
-                raise DailyQuotaExceeded(f"{self.model}: daily quota exhausted", wait) from e
-            raise
+        while True:
+            idx = self._active
+            try:
+                r = self._clients[idx].chat.completions.create(  # type: ignore[call-overload]
+                    model=self.model,
+                    messages=messages,  # type: ignore[arg-type]
+                    max_tokens=max_tokens or self._max_tokens,
+                    temperature=self._temperature if temperature is None else temperature,
+                    extra_body=extra or None,
+                    **kwargs,  # type: ignore[arg-type]
+                )
+                break
+            except Exception as e:
+                wait = daily_quota_retry_after(e)
+                if wait is None:
+                    raise
+                with self._lock:
+                    if self._active == idx and idx + 1 < len(self._clients):
+                        self._active = idx + 1  # this key is spent: move to the next one
+                        print(f"[judge] key {idx + 1} daily cap reached; using key {idx + 2}")
+                    elif self._active == idx:
+                        self._active = 0  # all spent; start over after the reset
+                        raise DailyQuotaExceeded(
+                            f"{self.model}: daily quota exhausted on all {len(self._clients)} "
+                            "key(s)",
+                            wait,
+                        ) from e
+                # another thread already switched, or we just did: retry on the active key
         wall = (time.perf_counter() - t) * 1000
         usage = r.usage
         return LLMResult(
