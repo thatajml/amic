@@ -542,6 +542,49 @@ def section_quality() -> str:
     return "\n".join(lines) + "\n"
 
 
+def section_summary(tr: pd.DataFrame | None) -> str:
+    """Token use vs quality for every live run, side by side (the efficiency/quality frontier)."""
+    if tr is None or "always" not in set(tr.arm):
+        return ""
+    base_mem = tr[tr.arm == "always"].memory_tokens.mean()
+    rows = []
+    for arm, g in tr.groupby("arm"):
+        p = Path("runs") / str(arm) / "pairwise_vs_always.jsonl"
+        net = None
+        if p.exists():
+            pw = pd.read_json(p, lines=True)
+            if not pw.empty:
+                net = (pw.result == "win").mean() - (pw.result == "loss").mean()
+        rows.append(
+            {
+                "run": arm,
+                "retrieval_rate": g.retrieved.mean(),
+                "memory_tokens": g.memory_tokens.mean(),
+                "tokens_saved_vs_always": 1 - g.memory_tokens.mean() / base_mem,
+                "net_win_vs_always": 0.0 if arm == "always" else net,
+            }
+        )
+    t = pd.DataFrame(rows).sort_values("memory_tokens", ascending=False)
+    return (
+        "\n".join(
+            [
+                "## 8. Summary: memory tokens vs answer quality (live runs, test split)",
+                "",
+                "`net_win_vs_always` = pairwise win rate minus loss rate against `always` (DEEP every "
+                "turn); 0 = as good as `always`. A run is better than another only if it uses fewer "
+                "memory tokens **and** has a higher net win rate.",
+                "",
+                _fmt(
+                    t,
+                    pct=["retrieval_rate", "tokens_saved_vs_always", "net_win_vs_always"],
+                    dec={"memory_tokens": 0},
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
     OUT.mkdir(parents=True, exist_ok=True)
@@ -561,6 +604,7 @@ def main() -> None:
     parts.append(eff_md)
     parts.append(section_breakeven(tr))
     parts.append(section_quality())
+    parts.append(section_summary(tr))
     md = "\n".join(p for p in parts if p)
     (OUT / "main.md").write_text(md, encoding="utf-8")
     print(md)

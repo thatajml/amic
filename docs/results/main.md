@@ -85,13 +85,15 @@ Largest standardized LogReg coefficients: `s4_concept_hits` -0.62, `s2_m0_turns`
 
 Milliseconds. `gate` = signals + Tier 0 + Tier 1 (excludes the query embedding, which `always` pays too). Tutor calls are served from a prompt-keyed cache when an identical prompt+seed was already generated; cached entries keep their first-run prefill/decode timings, and `total` adds those back in place of the ~0 ms cache lookup.
 
-| arm       |   n | retrieval_rate   |   prompt_tokens |   memory_tokens |   embed_p50 |   gate_p50 |   gate_p95 |   retrieval_p50 |   prefill_mean |   total_p50 |   total_p95 |   mem_tok_saved_vs_always |   mem_prefill_uncached_est |
-|:----------|----:|:-----------------|----------------:|----------------:|------------:|-----------:|-----------:|----------------:|---------------:|------------:|------------:|--------------------------:|---------------------------:|
-| always    | 483 | 100.0%           |           906.8 |           800   |         7.8 |        0   |        0   |             3.1 |           70.4 |      2691.7 |      5409.7 |                       0   |                      238.9 |
-| amic      | 483 | 92.5%            |           489.7 |           368.7 |         6.8 |        2.1 |        3.3 |             2.7 |           61.1 |      2584.4 |      4539.1 |                     431.3 |                      110.1 |
-| amic_lam1 | 483 | 60.9%            |           389.2 |           268.7 |         8.3 |        3   |        3.4 |             2.4 |           49   |      2588.8 |      4359   |                     531.3 |                       80.2 |
-| never     | 483 | 0.0%             |           125.6 |             0   |         0   |        0   |        0   |             0   |           28.2 |      2717.9 |      4480.2 |                     800   |                        0   |
-| oracle    | 483 | 55.9%            |           359.8 |           239   |         6.6 |        0   |        0   |             2.3 |           47.8 |      2571.6 |      4353.5 |                     561   |                       71.4 |
+| arm            |   n | retrieval_rate   |   prompt_tokens |   memory_tokens |   embed_p50 |   gate_p50 |   gate_p95 |   retrieval_p50 |   prefill_mean |   total_p50 |   total_p95 |   mem_tok_saved_vs_always |   mem_prefill_uncached_est |
+|:---------------|----:|:-----------------|----------------:|----------------:|------------:|-----------:|-----------:|----------------:|---------------:|------------:|------------:|--------------------------:|---------------------------:|
+| always         | 483 | 100.0%           |           906.8 |           800   |         7.8 |        0   |        0   |             3.1 |           70.4 |      2691.7 |      5409.7 |                       0   |                      238.9 |
+| always_shallow | 483 | 100.0%           |           437.5 |           314   |         5.9 |        0   |        0   |             2.5 |           64.9 |      2556   |      4580   |                     486   |                       93.8 |
+| amic           | 483 | 92.5%            |           489.7 |           368.7 |         6.8 |        2.1 |        3.3 |             2.7 |           61.1 |      2584.4 |      4539.1 |                     431.3 |                      110.1 |
+| amic_lam1      | 483 | 60.9%            |           389.2 |           268.7 |         8.3 |        3   |        3.4 |             2.4 |           49   |      2588.8 |      4359   |                     531.3 |                       80.2 |
+| amic_no_s3     | 483 | 91.9%            |           489.8 |           369.1 |         5.6 |        1.7 |        2.1 |             2.3 |           60   |      2579.1 |      4490.8 |                     430.9 |                      110.2 |
+| never          | 483 | 0.0%             |           125.6 |             0   |         0   |        0   |        0   |             0   |           28.2 |      2717.9 |      4480.2 |                     800   |                        0   |
+| oracle         | 483 | 55.9%            |           359.8 |           239   |         6.6 |        0   |        0   |             2.3 |           47.8 |      2571.6 |      4353.5 |                     561   |                       71.4 |
 
 **Prefill caveat.** Measured prefill is nearly flat across arms (the `always` arm sends ~6x the prompt tokens of `never` at similar prefill) because Ollama reuses cached prompt prefixes: each synthetic learner has only a handful of history records, so DEEP retrieval returns an almost identical memory block on every query from that learner. Real deployments with larger, more varied memories would cache less. `mem_prefill_uncached_est` = memory tokens x 0.299 ms/token, the uncached prefill rate measured by the Day-1 probe (nonce-first prompts, `runs/probe.json`). Token counts are unaffected by caching and are the primary efficiency metric.
 
@@ -137,30 +139,69 @@ C_emb cancels (both arms embed the query once; plan R1). Tier 2 and escalation a
 
 **`amic_lam1`: measured: 2.460 ms overhead vs 22.9 ms saved (holds); uncached estimate: 160.1 ms saved (holds).** End-to-end p50 total 2589 ms vs always 2692 ms; mean prompt tokens 389 vs 907.
 
+### amic_no_s3
+
+| term                                               |    value |
+|:---------------------------------------------------|---------:|
+| C_feat (signals, excl. embedding)                  |   0.1717 |
+| C_T0                                               |   0.0042 |
+| P(T1)                                              |   0.8199 |
+| C_T1 (when fired)                                  |   1.6934 |
+| P(T2), P(esc)                                      |   0      |
+| r (retrieval rate)                                 |   0.9193 |
+| memory tokens saved / query (vs always)            | 430.851  |
+| store ms saved / query                             |   0.9635 |
+| prefill ms saved / query (measured, prompt-cached) |  10.4462 |
+| LHS: gate overhead per query (ms)                  |   1.5643 |
+| RHS measured: store + prefill saved (ms)           |  11.4097 |
+| RHS uncached estimate: store + tokens x rate (ms)  | 129.646  |
+
+**`amic_no_s3`: measured: 1.564 ms overhead vs 11.4 ms saved (holds); uncached estimate: 129.6 ms saved (holds).** End-to-end p50 total 2579 ms vs always 2692 ms; mean prompt tokens 490 vs 907.
+
 ## 7. Response quality: pairwise LLM judge vs `always` (test split)
 
 Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as ties without a judge call. Fabrication rates are over judged (non-identical) pairs.
 
-| run       |   n |   seeds | win          | tie          | loss         | identical_to_always   | fabricated (run)   | fabricated (always)   |
-|:----------|----:|--------:|:-------------|:-------------|:-------------|:----------------------|:-------------------|:----------------------|
-| amic      | 483 |       3 | 34.8% ± 2.7% | 23.6% ± 1.2% | 41.6% ± 1.9% | 16.4%                 | 6.9%               | 5.4%                  |
-| amic_lam1 | 483 |       3 | 27.3% ± 3.5% | 25.9% ± 2.5% | 46.8% ± 3.1% | 16.4%                 | 12.6%              | 5.0%                  |
-| never     | 483 |       3 | 15.1% ± 3.2% | 6.8% ± 1.1%  | 78.1% ± 4.2% | 0.0%                  | 28.8%              | 2.9%                  |
-| oracle    | 483 |       3 | 30.0% ± 1.6% | 21.5% ± 0.4% | 48.4% ± 1.2% | 12.6%                 | 10.9%              | 5.0%                  |
+| run            |   n |   seeds | win          | tie          | loss         | identical_to_always   | fabricated (run)   | fabricated (always)   |
+|:---------------|----:|--------:|:-------------|:-------------|:-------------|:----------------------|:-------------------|:----------------------|
+| always_shallow | 483 |       3 | 42.7% ± 3.4% | 10.4% ± 2.9% | 47.0% ± 2.4% | 0.2%                  | 8.3%               | 7.3%                  |
+| amic           | 483 |       3 | 34.8% ± 2.7% | 23.6% ± 1.2% | 41.6% ± 1.9% | 16.4%                 | 6.9%               | 5.4%                  |
+| amic_lam1      | 483 |       3 | 27.3% ± 3.5% | 25.9% ± 2.5% | 46.8% ± 3.1% | 16.4%                 | 12.6%              | 5.0%                  |
+| amic_no_s3     | 483 |       3 | 34.0% ± 4.0% | 24.4% ± 4.0% | 41.6% ± 0.0% | 17.0%                 | 8.7%               | 5.7%                  |
+| never          | 483 |       3 | 15.1% ± 3.2% | 6.8% ± 1.1%  | 78.1% ± 4.2% | 0.0%                  | 28.8%              | 2.9%                  |
+| oracle         | 483 |       3 | 30.0% ± 1.6% | 21.5% ± 0.4% | 48.4% ± 1.2% | 12.6%                 | 10.9%              | 5.0%                  |
 
 ### By the route each run chose (all seeds pooled)
 
 `always` routes every query DEEP, so a DEEP choice reproduces its answer (tie). The SHALLOW and SKIP rows are where the runs differ from `always`.
 
-| run       | route chosen   |   n | win   | tie    | loss   | identical_to_always   |
-|:----------|:---------------|----:|:------|:-------|:-------|:----------------------|
-| amic      | DEEP           |  78 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
-| amic      | SHALLOW        | 369 | 44.2% | 8.7%   | 47.2%  | 0.3%                  |
-| amic      | SKIP           |  36 | 13.9% | 11.1%  | 75.0%  | 0.0%                  |
-| amic_lam1 | DEEP           |  78 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
-| amic_lam1 | SHALLOW        | 216 | 44.9% | 10.6%  | 44.4%  | 0.5%                  |
-| amic_lam1 | SKIP           | 189 | 18.5% | 12.7%  | 68.8%  | 0.0%                  |
-| never     | SKIP           | 483 | 15.1% | 6.8%   | 78.1%  | 0.0%                  |
-| oracle    | DEEP           |  60 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
-| oracle    | SHALLOW        | 210 | 48.6% | 9.5%   | 41.9%  | 0.5%                  |
-| oracle    | SKIP           | 213 | 20.2% | 11.3%  | 68.5%  | 0.0%                  |
+| run            | route chosen   |   n | win   | tie    | loss   | identical_to_always   |
+|:---------------|:---------------|----:|:------|:-------|:-------|:----------------------|
+| always_shallow | SHALLOW        | 483 | 42.7% | 10.4%  | 47.0%  | 0.2%                  |
+| amic           | DEEP           |  78 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
+| amic           | SHALLOW        | 369 | 44.2% | 8.7%   | 47.2%  | 0.3%                  |
+| amic           | SKIP           |  36 | 13.9% | 11.1%  | 75.0%  | 0.0%                  |
+| amic_lam1      | DEEP           |  78 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
+| amic_lam1      | SHALLOW        | 216 | 44.9% | 10.6%  | 44.4%  | 0.5%                  |
+| amic_lam1      | SKIP           | 189 | 18.5% | 12.7%  | 68.8%  | 0.0%                  |
+| amic_no_s3     | DEEP           |  81 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
+| amic_no_s3     | SHALLOW        | 363 | 43.0% | 8.8%   | 48.2%  | 0.3%                  |
+| amic_no_s3     | SKIP           |  39 | 20.5% | 12.8%  | 66.7%  | 0.0%                  |
+| never          | SKIP           | 483 | 15.1% | 6.8%   | 78.1%  | 0.0%                  |
+| oracle         | DEEP           |  60 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
+| oracle         | SHALLOW        | 210 | 48.6% | 9.5%   | 41.9%  | 0.5%                  |
+| oracle         | SKIP           | 213 | 20.2% | 11.3%  | 68.5%  | 0.0%                  |
+
+## 8. Summary: memory tokens vs answer quality (live runs, test split)
+
+`net_win_vs_always` = pairwise win rate minus loss rate against `always` (DEEP every turn); 0 = as good as `always`. A run is better than another only if it uses fewer memory tokens **and** has a higher net win rate.
+
+| run            | retrieval_rate   |   memory_tokens | tokens_saved_vs_always   | net_win_vs_always   |
+|:---------------|:-----------------|----------------:|:-------------------------|:--------------------|
+| always         | 100.0%           |             800 | 0.0%                     | 0.0%                |
+| amic_no_s3     | 91.9%            |             369 | 53.9%                    | -7.7%               |
+| amic           | 92.5%            |             369 | 53.9%                    | -6.8%               |
+| always_shallow | 100.0%           |             314 | 60.7%                    | -4.3%               |
+| amic_lam1      | 60.9%            |             269 | 66.4%                    | -19.5%              |
+| oracle         | 55.9%            |             239 | 70.1%                    | -18.4%              |
+| never          | 0.0%             |               0 | 100.0%                   | -62.9%              |

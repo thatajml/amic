@@ -1,0 +1,4 @@
+# Second, stronger baseline (PLAN R2): retrieve on every query, but SHALLOW (top-k 3) instead
+# of DEEP. Run with: --arms always --name always_shallow
+routes:
+  always_route: SHALLOW
