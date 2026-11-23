@@ -1,0 +1,10 @@
+# LongMemEval live QA (pre-registered L2, docs/PLAN.md section 9). Combine with an arm's ablation
+# file: --dataset longmemeval --config configs/longmemeval.yaml [configs/ablations/...].
+# General-assistant prompt with the question date; larger memory budgets (haystack turns are
+# long); an 8k context for the longer prompts (Tier 2 / the verifier share it, see ModelConfig).
+prompt_profile: assistant
+routes:
+  shallow_token_budget: 1000
+  deep_token_budget: 3000
+models:
+  num_ctx: 8192

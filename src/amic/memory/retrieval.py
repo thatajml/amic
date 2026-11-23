@@ -7,6 +7,7 @@ import numpy as np
 from amic.contracts.config import RouteConfig
 from amic.contracts.models import MemoryItem, MemoryTier, RetrievalPlan
 from amic.memory.stores.episodic import EpisodicStore, Hit
+from amic.memory.stores.semantic import SemanticStore
 
 
 def mmr(q: np.ndarray, cand: np.ndarray, k: int, lam: float) -> list[int]:
@@ -25,9 +26,15 @@ def mmr(q: np.ndarray, cand: np.ndarray, k: int, lam: float) -> list[int]:
 
 
 class ChromaRetrievalEngine:
-    def __init__(self, episodic: EpisodicStore, routes: RouteConfig) -> None:
+    def __init__(
+        self,
+        episodic: EpisodicStore,
+        routes: RouteConfig,
+        semantic: SemanticStore | None = None,
+    ) -> None:
         self._episodic = episodic
         self._routes = routes
+        self._semantic = semantic
         self.calls = 0  # observable: lets tests assert SKIP made zero store contact
 
     def retrieve(self, plan: RetrievalPlan, q_vec: np.ndarray, user_id: str) -> list[MemoryItem]:
@@ -42,7 +49,11 @@ class ChromaRetrievalEngine:
                 idx = mmr(q_vec, np.stack([h.embedding for h in hits]), plan.k, plan.mmr_lambda)
                 hits = [hits[i] for i in idx]
             items += [_to_item(h, MemoryTier.M1) for h in hits[: plan.k]]
-        # M2 (facts) and M3 (profile) stores plug in here; not built in this sprint.
+        if MemoryTier.M2 in plan.stores and self._semantic is not None:
+            # facts alone: k facts; next to M1 (DEEP): m2_k facts on top of the episodes
+            k = self._routes.m2_k if MemoryTier.M1 in plan.stores else plan.k
+            items += [_to_item(h, MemoryTier.M2) for h in self._semantic.current(user_id, q_vec, k)]
+        # M3 (learner profile) would plug in here; not built (future work).
         return items
 
 

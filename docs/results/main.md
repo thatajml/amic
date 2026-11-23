@@ -90,6 +90,7 @@ Milliseconds. `gate` = signals + Tier 0 + Tier 1 (excludes the query embedding, 
 | arm            |   n | retrieval_rate   |   prompt_tokens |   memory_tokens |   embed_p50 |   gate_p50 |   gate_p95 |   retrieval_p50 |   prefill_mean |   total_p50 |   total_p95 |   mem_tok_saved_vs_always |   mem_prefill_uncached_est |
 |:---------------|----:|:-----------------|----------------:|----------------:|------------:|-----------:|-----------:|----------------:|---------------:|------------:|------------:|--------------------------:|---------------------------:|
 | always         | 483 | 100.0%           |           906.8 |           800   |         7.8 |        0   |        0   |             3.1 |           70.4 |      2691.7 |      5409.7 |                       0   |                      238.9 |
+| always_m2      | 483 | 100.0%           |           204.6 |            68.8 |        11   |        0   |        0   |             4   |           37   |      2731.6 |      4427.4 |                     731.1 |                       20.6 |
 | always_shallow | 483 | 100.0%           |           437.5 |           314   |         5.9 |        0   |        0   |             2.5 |           64.9 |      2556   |      4580   |                     486   |                       93.8 |
 | amic           | 483 | 92.5%            |           489.7 |           368.7 |         6.8 |        2.1 |        3.3 |             2.7 |           61.1 |      2584.4 |      4539.1 |                     431.3 |                      110.1 |
 | amic_esc       | 483 | 93.2%            |           492.1 |           370.3 |         7.9 |        2.8 |        3.4 |             2.9 |           61.1 |      2602.6 |      4665.1 |                     429.7 |                      110.6 |
@@ -97,6 +98,7 @@ Milliseconds. `gate` = signals + Tier 0 + Tier 1 (excludes the query embedding, 
 | amic_lam1      | 483 | 60.9%            |           389.2 |           268.7 |         8.3 |        3   |        3.4 |             2.4 |           49   |      2588.8 |      4359   |                     531.3 |                       80.2 |
 | amic_lam1_esc  | 483 | 67.9%            |           419.1 |           289.8 |         8.1 |        2.3 |        3.4 |             2.8 |           49   |      2711.5 |      5430.1 |                     510.2 |                       86.5 |
 | amic_no_s3     | 483 | 91.9%            |           489.8 |           369.1 |         5.6 |        1.7 |        2.1 |             2.3 |           60   |      2579.1 |      4490.8 |                     430.9 |                      110.2 |
+| amic_v2        | 483 | 92.8%            |           331.1 |           199.6 |         8.5 |        3.1 |      288.4 |             4.2 |           61.9 |      2748.8 |      4927.9 |                     600.3 |                       59.6 |
 | never          | 483 | 0.0%             |           125.6 |             0   |         0   |        0   |        0   |             0   |           28.2 |      2717.9 |      4480.2 |                     800   |                        0   |
 | never_esc      | 483 | 25.9%            |           237.6 |            80.6 |         0   |        0   |        0   |             0   |           28.2 |      3236   |      6220.7 |                     719.3 |                       24.1 |
 | oracle         | 483 | 55.9%            |           359.8 |           239   |         6.6 |        0   |        0   |             2.3 |           47.8 |      2571.6 |      4353.5 |                     561   |                       71.4 |
@@ -245,6 +247,29 @@ C_emb cancels (both arms embed the query once; plan R1). Every overhead term is 
 
 **`amic_no_s3`: measured: 1.564 ms overhead vs 11.4 ms saved (holds); uncached estimate: 129.6 ms saved (holds).** End-to-end p50 total 2579 ms vs always 2692 ms; mean prompt tokens 490 vs 907.
 
+### amic_v2
+
+| term                                                    |    value |
+|:--------------------------------------------------------|---------:|
+| C_feat (signals, excl. embedding)                       |   0.413  |
+| C_T0                                                    |   0.0056 |
+| P(T1)                                                   |   0.8199 |
+| C_T1 (when fired)                                       |   2.5897 |
+| P(T2) x C_T2 (Tier-2 ms per query)                      |  30.6773 |
+| decision-cache ms per query                             |   0.065  |
+| verify ms per query (P(SKIP) x C_ver)                   |  52.3733 |
+| P(esc)                                                  |   0.0083 |
+| P(esc) x (C_ret + C_gen) (escalation ms per query)      |  24.3549 |
+| r (retrieval rate, escalations included)                |   0.9275 |
+| memory tokens saved / query (vs always)                 | 600.344  |
+| store ms saved / query                                  |  -1.3417 |
+| prefill ms saved / query (measured, prompt-cached)      |   8.5213 |
+| LHS: gate + verify + escalation overhead per query (ms) | 110.012  |
+| RHS measured: store + prefill saved (ms)                |   7.1795 |
+| RHS uncached estimate: store + tokens x rate (ms)       | 177.964  |
+
+**`amic_v2`: measured: 110.012 ms overhead vs 7.2 ms saved (does NOT hold); uncached estimate: 178.0 ms saved (holds).** End-to-end p50 total 2749 ms vs always 2692 ms; mean prompt tokens 331 vs 907.
+
 ### never_esc
 
 | term                                                    |    value |
@@ -274,6 +299,7 @@ Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as tie
 
 | run            |   n |   seeds | win          | tie          | loss         | net (95% CI, probe)     | net (95% CI, learner)   | identical_to_always   | fabricated (run)   | fabricated (always)   |
 |:---------------|----:|--------:|:-------------|:-------------|:-------------|:------------------------|:------------------------|:----------------------|:-------------------|:----------------------|
+| always_m2      | 483 |       3 | 26.3% ± 0.9% | 7.0% ± 0.4%  | 66.7% ± 1.3% | -40.4% [-48.7%, -32.1%] | -40.4% [-46.6%, -33.8%] | 0.0%                  | 14.1%              | 4.8%                  |
 | always_shallow | 483 |       3 | 42.7% ± 3.4% | 10.4% ± 2.9% | 47.0% ± 2.4% | -4.3% [-13.3%, +4.6%]   | -4.3% [-11.7%, +3.1%]   | 0.2%                  | 8.3%               | 7.3%                  |
 | amic           | 483 |       3 | 34.8% ± 2.7% | 23.6% ± 1.2% | 41.6% ± 1.9% | -6.8% [-15.3%, +1.4%]   | -6.8% [-14.6%, +1.2%]   | 16.4%                 | 6.9%               | 5.4%                  |
 | amic_esc       | 483 |       3 | 35.0% ± 2.9% | 23.4% ± 1.6% | 41.6% ± 1.9% | -6.6% [-15.1%, +1.7%]   | -6.6% [-14.6%, +1.5%]   | 16.4%                 | 6.7%               | 5.4%                  |
@@ -281,6 +307,7 @@ Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as tie
 | amic_lam1      | 483 |       3 | 27.3% ± 3.5% | 25.9% ± 2.5% | 46.8% ± 3.1% | -19.5% [-28.2%, -11.0%] | -19.5% [-26.3%, -12.7%] | 16.4%                 | 12.6%              | 5.0%                  |
 | amic_lam1_esc  | 483 |       3 | 29.6% ± 3.4% | 25.7% ± 2.2% | 44.7% ± 2.7% | -15.1% [-23.6%, -6.6%]  | -15.1% [-21.3%, -9.4%]  | 16.4%                 | 7.2%               | 5.4%                  |
 | amic_no_s3     | 483 |       3 | 34.0% ± 4.0% | 24.4% ± 4.0% | 41.6% ± 0.0% | -7.7% [-15.7%, +0.4%]   | -7.7% [-12.3%, -2.5%]   | 17.0%                 | 8.7%               | 5.7%                  |
+| amic_v2        | 483 |       3 | 30.8% ± 1.8% | 8.3% ± 0.4%  | 60.9% ± 1.6% | -30.0% [-38.9%, -21.3%] | -30.0% [-36.4%, -22.9%] | 0.0%                  | 12.2%              | 5.2%                  |
 | never          | 483 |       3 | 15.1% ± 3.2% | 6.8% ± 1.1%  | 78.1% ± 4.2% | -62.9% [-70.0%, -55.9%] | -62.9% [-67.5%, -58.0%] | 0.0%                  | 28.8%              | 2.9%                  |
 | never_esc      | 483 |       3 | 24.0% ± 2.9% | 7.9% ± 0.4%  | 68.1% ± 2.6% | -44.1% [-52.6%, -35.6%] | -44.1% [-54.2%, -34.6%] | 0.2%                  | 13.3%              | 4.6%                  |
 | oracle         | 483 |       3 | 30.0% ± 1.6% | 21.5% ± 0.4% | 48.4% ± 1.2% | -18.4% [-27.3%, -9.7%]  | -18.4% [-28.5%, -8.9%]  | 12.6%                 | 10.9%              | 5.0%                  |
@@ -289,17 +316,20 @@ Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as tie
 
 `diff` = net win of the first run minus net win of the second, on the (probe, seed) pairs both runs answered. A difference counts as real only when BOTH its probe- and learner-clustered CIs exclude 0 (decision rule fixed before the extension runs; docs/PLAN.md).
 
-| comparison                |   pairs | diff (95% CI, probe)    | diff (95% CI, learner)   | both CIs exclude 0   |
-|:--------------------------|--------:|:------------------------|:-------------------------|:---------------------|
-| amic − always_shallow     |     483 | -2.5% [-10.4%, +5.0%]   | -2.5% [-9.3%, +5.0%]     | no                   |
-| amic − amic_no_s3         |     483 | +0.8% [-5.4%, +7.0%]    | +0.8% [-4.6%, +6.9%]     | no                   |
-| amic_lam1 − amic          |     483 | -12.6% [-20.7%, -4.8%]  | -12.6% [-20.5%, -3.1%]   | yes                  |
-| oracle − amic             |     483 | -11.6% [-21.3%, -1.4%]  | -11.6% [-22.5%, -3.7%]   | yes                  |
-| amic_esc − amic           |     483 | +0.2% [+0.0%, +0.6%]    | +0.2% [+0.0%, +0.6%]     | no                   |
-| amic_lam1_esc − amic_lam1 |     483 | +4.3% [+1.4%, +7.5%]    | +4.3% [+1.4%, +7.6%]     | yes                  |
-| never_esc − never         |     483 | +18.8% [+12.6%, +25.5%] | +18.8% [+11.2%, +27.7%]  | yes                  |
-| amic_esc − never_esc      |     483 | +37.5% [+27.5%, +47.0%] | +37.5% [+27.1%, +47.3%]  | yes                  |
-| amic_full − amic          |     483 | +0.0% [-1.2%, +1.2%]    | +0.0% [-0.6%, +0.6%]     | no                   |
+| comparison                 |   pairs | diff (95% CI, probe)    | diff (95% CI, learner)   | both CIs exclude 0   |
+|:---------------------------|--------:|:------------------------|:-------------------------|:---------------------|
+| amic − always_shallow      |     483 | -2.5% [-10.4%, +5.0%]   | -2.5% [-9.3%, +5.0%]     | no                   |
+| amic − amic_no_s3          |     483 | +0.8% [-5.4%, +7.0%]    | +0.8% [-4.6%, +6.9%]     | no                   |
+| amic_lam1 − amic           |     483 | -12.6% [-20.7%, -4.8%]  | -12.6% [-20.5%, -3.1%]   | yes                  |
+| oracle − amic              |     483 | -11.6% [-21.3%, -1.4%]  | -11.6% [-22.5%, -3.7%]   | yes                  |
+| amic_esc − amic            |     483 | +0.2% [+0.0%, +0.6%]    | +0.2% [+0.0%, +0.6%]     | no                   |
+| amic_lam1_esc − amic_lam1  |     483 | +4.3% [+1.4%, +7.5%]    | +4.3% [+1.4%, +7.6%]     | yes                  |
+| never_esc − never          |     483 | +18.8% [+12.6%, +25.5%] | +18.8% [+11.2%, +27.7%]  | yes                  |
+| amic_esc − never_esc       |     483 | +37.5% [+27.5%, +47.0%] | +37.5% [+27.1%, +47.3%]  | yes                  |
+| amic_full − amic           |     483 | +0.0% [-1.2%, +1.2%]    | +0.0% [-0.6%, +0.6%]     | no                   |
+| always_m2 − always_shallow |     483 | -36.0% [-46.8%, -25.7%] | -36.0% [-45.9%, -25.4%]  | yes                  |
+| amic_v2 − always_shallow   |     483 | -25.7% [-37.7%, -14.1%] | -25.7% [-35.2%, -14.8%]  | yes                  |
+| amic_v2 − amic             |     483 | -23.2% [-34.2%, -12.4%] | -23.2% [-32.7%, -11.6%]  | yes                  |
 
 ### By the route each run chose (all seeds pooled)
 
@@ -307,6 +337,7 @@ Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as tie
 
 | run            | route chosen   |   n | win   | tie    | loss   | identical_to_always   |
 |:---------------|:---------------|----:|:------|:-------|:-------|:----------------------|
+| always_m2      | SHALLOW        | 483 | 26.3% | 7.0%   | 66.7%  | 0.0%                  |
 | always_shallow | SHALLOW        | 483 | 42.7% | 10.4%  | 47.0%  | 0.2%                  |
 | amic           | DEEP           |  78 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
 | amic           | SHALLOW        | 369 | 44.2% | 8.7%   | 47.2%  | 0.3%                  |
@@ -326,6 +357,9 @@ Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as tie
 | amic_no_s3     | DEEP           |  81 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
 | amic_no_s3     | SHALLOW        | 363 | 43.0% | 8.8%   | 48.2%  | 0.3%                  |
 | amic_no_s3     | SKIP           |  39 | 20.5% | 12.8%  | 66.7%  | 0.0%                  |
+| amic_v2        | DEEP           |  81 | 53.1% | 9.9%   | 37.0%  | 0.0%                  |
+| amic_v2        | SHALLOW        | 363 | 26.4% | 8.0%   | 65.6%  | 0.0%                  |
+| amic_v2        | SKIP           |  39 | 25.6% | 7.7%   | 66.7%  | 0.0%                  |
 | never          | SKIP           | 483 | 15.1% | 6.8%   | 78.1%  | 0.0%                  |
 | never_esc      | SKIP           | 483 | 24.0% | 7.9%   | 68.1%  | 0.2%                  |
 | oracle         | DEEP           |  60 | 0.0%  | 100.0% | 0.0%   | 100.0%                |
@@ -347,7 +381,9 @@ Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as tie
 | amic_lam1_esc  | 67.9%            |             290 | 63.8%                    | -15.1%              | [-21.3%, -9.4%]        |
 | amic_lam1      | 60.9%            |             269 | 66.4%                    | -19.5%              | [-26.3%, -12.7%]       |
 | oracle         | 55.9%            |             239 | 70.1%                    | -18.4%              | [-28.5%, -8.9%]        |
+| amic_v2        | 92.8%            |             200 | 75.0%                    | -30.0%              | [-36.4%, -22.9%]       |
 | never_esc      | 25.9%            |              81 | 89.9%                    | -44.1%              | [-54.2%, -34.6%]       |
+| always_m2      | 100.0%           |              69 | 91.4%                    | -40.4%              | [-46.6%, -33.8%]       |
 | never          | 0.0%             |               0 | 100.0%                   | -62.9%              | [-67.5%, -58.0%]       |
 
 ## 9. Verify-and-escalate (extension; pre-registered E1-E4)
@@ -390,3 +426,81 @@ Band [0.000, 0.270] around tau* = 0.20, from `configs/ablations/full.yaml` (size
 | amic as run (T0+T1, original band -> SHALLOW) | 92.5%            | 5.6%              |  0.522 | +0.081 [-0.025, +0.198]       | 0.0%          | 30.4%            |
 
 Full cascade minus the same band failing open (cost per query, learner CI): -0.012 [-0.081, +0.049]. Tier 2 decided 11 test probes; of those, Tier 2 retrieved on 36% and the label says memory was required on 18%. Verdict latency (val + test, n = 266): p50 285 ms, p95 308 ms; 0.0% would exceed the timeout; routes {'SKIP': 0.762, 'SHALLOW': 0.238}.
+
+## 11. LongMemEval_S, cleaned (external check; pre-registered L1, L2)
+
+500 questions, each with its own ~48-session history (470 answerable = memory-required; 30 abstention questions = weak memory-not-required analogue). Tier 1 is the education-trained model, unchanged; S4 concept features are Python-specific, so this measures transfer. Decisions are replayed from features computed with the live bus code (`scripts/prepare_longmemeval.py`).
+
+| policy                       | retrieval_rate   | recall   | false_skip_rate   |   cost | cost_vs_always          |
+|:-----------------------------|:-----------------|:---------|:------------------|-------:|:------------------------|
+| never                        | 0.0%             | 0.0%     | 100.0%            |   3.76 | +3.700 [+3.590, +3.800] |
+| always                       | 100.0%           | 100.0%   | 0.0%              |   0.06 | +0.000 [+0.000, +0.000] |
+| oracle                       | 94.0%            | 100.0%   | 0.0%              |   0    | -0.060 [-0.082, -0.040] |
+| amic (T0+T1, band->SHALLOW)  | 100.0%           | 100.0%   | 0.0%              |   0.06 | +0.000 [+0.000, +0.000] |
+| amic, hard tau (no band)     | 100.0%           | 100.0%   | 0.0%              |   0.06 | +0.000 [+0.000, +0.000] |
+| ablation: Tier 0 only        | 100.0%           | 100.0%   | 0.0%              |   0.06 | +0.000 [+0.000, +0.000] |
+| ablation: no S3 sketch probe | 100.0%           | 100.0%   | 0.0%              |   0.06 | +0.000 [+0.000, +0.000] |
+| ablation: tau fixed 0.5      | 98.0%            | 97.9%    | 2.1%              |   0.14 | +0.080 [+0.032, +0.128] |
+| variant: LightGBM Tier 1     | 100.0%           | 100.0%   | 0.0%              |   0.06 | +0.000 [+0.000, +0.000] |
+
+AMIC (T0+T1) retrieval rate by question type:
+
+| category                  |   n | amic_retrieval_rate   |
+|:--------------------------|----:|:----------------------|
+| knowledge-update          |  78 | 100.0%                |
+| multi-session             | 133 | 100.0%                |
+| single-session-assistant  |  56 | 100.0%                |
+| single-session-preference |  30 | 100.0%                |
+| single-session-user       |  70 | 100.0%                |
+| temporal-reasoning        | 133 | 100.0%                |
+
+### Gold-answer QA accuracy (live, stratified subset, temperature 0)
+
+Every abstention question plus 20 answerable questions per type; one run per arm at temperature 0; graded yes/no against the gold answer by the Gemini judge with per-type rules following the official protocol (`scripts/judge_longmemeval.py`). CIs: bootstrap over questions.
+
+| run                |   n | accuracy (answerable, 95% CI)   | abstention accuracy   | retrieval_rate   | knowledge-update   | multi-session   | single-session-assistant   | single-session-preference   | single-session-user   | temporal-reasoning   |   memory_tokens |
+|:-------------------|----:|:--------------------------------|:----------------------|:-----------------|:-------------------|:----------------|:---------------------------|:----------------------------|:----------------------|:---------------------|----------------:|
+| lme_always         | 150 | 45.8% [36.7%, 55.0%]            | 86.7% (n=30)          | 100.0%           | 45.0%              | 15.0%           | 75.0%                      | 50.0%                       | 60.0%                 | 30.0%                |            2029 |
+| lme_always_shallow | 150 | 45.8% [36.7%, 55.0%]            | 96.7% (n=30)          | 100.0%           | 50.0%              | 15.0%           | 70.0%                      | 40.0%                       | 70.0%                 | 30.0%                |             488 |
+| lme_never          | 150 | 5.0% [1.7%, 9.2%]               | 100.0% (n=30)         | 0.0%             | 0.0%               | 0.0%            | 15.0%                      | 10.0%                       | 0.0%                  | 5.0%                 |               0 |
+| lme_amic           | 150 | 48.3% [39.2%, 57.5%]            | 96.7% (n=30)          | 100.0%           | 55.0%              | 20.0%           | 75.0%                      | 40.0%                       | 70.0%                 | 30.0%                |             665 |
+| lme_amic_esc       | 150 | 48.3% [39.2%, 57.5%]            | 96.7% (n=30)          | 100.0%           | 55.0%              | 20.0%           | 75.0%                      | 40.0%                       | 70.0%                 | 30.0%                |             665 |
+
+Paired accuracy differences (answerable questions):
+
+| comparison                      |   questions | accuracy diff (95% CI)   |
+|:--------------------------------|------------:|:-------------------------|
+| lme_amic − lme_always           |         120 | +2.5% [-5.8%, +10.8%]    |
+| lme_amic − lme_always_shallow   |         120 | +2.5% [-0.8%, +6.7%]     |
+| lme_amic_esc − lme_amic         |         120 | +0.0% [+0.0%, +0.0%]     |
+| lme_always_shallow − lme_always |         120 | +0.0% [-9.2%, +9.2%]     |
+| lme_never − lme_always          |         120 | -40.8% [-50.0%, -31.7%]  |
+
+## 12. Memory system: M2 facts, write path, decision cache
+
+### M2 fact extraction (seeded education histories)
+
+152 past sessions consolidated by `scripts/extract_facts.py` (one LLM call per session, salient exchanges only). Facts extracted: 866 (5.7 per session). Resolution: inserted 671, superseded an older fact 148, refreshed 26, skipped as duplicates 21. Superseded facts are closed (validity interval ended), never deleted; routes read current facts only.
+
+### Async write path (W1)
+
+Response-path cost of the long-term write: before, the whole consolidation ran inline after the answer (`inline_write_ms`); now the response path only enqueues (`enqueue_ms`, SQLite queue) and the ConsolidationWorker makes the turn visible later (`enqueue_to_visible_ms`: queue wait + consolidation). `scripts/bench_writepath.py`, real embedder and LLM, scratch Chroma collection.
+
+| variant    | measure               |   n |   p50 ms |   p95 ms |
+|:-----------|:----------------------|----:|---------:|---------:|
+| no_extract | inline_write_ms       |  30 |     17.3 |     23.3 |
+| no_extract | enqueue_ms            |  30 |      2.2 |      3.9 |
+| no_extract | enqueue_to_visible_ms |  30 |    398.2 |    644.5 |
+| extract    | inline_write_ms       |  20 |   4456.8 |   5379.3 |
+| extract    | enqueue_ms            |  20 |      2.2 |      4.4 |
+| extract    | enqueue_to_visible_ms |  20 |  44725.1 |  79181.3 |
+
+### Decision cache (C1, offline replay on the test split)
+
+The base gate replayed in the live runs' order with the cache in front of Tier 1 (Tier-0 decisions are never cached). `natural`: each test probe once, the order the live runs used; `repeat`: each probe asked twice in a row (a hit on every second ask = hits equal probes); `false sharing`: share of a learner's distinct queries that fall into a bucket an earlier query already used.
+
+|   LSH bits | natural: hit rate   |   natural: wrong hits | repeat stream: hits / probes   |   repeat: wrong hits | false sharing (distinct queries)   |
+|-----------:|:--------------------|----------------------:|:-------------------------------|---------------------:|:-----------------------------------|
+|          8 | 4.5%                |                     0 | 138 / 132                      |                    0 | 5.6%                               |
+|         12 | 0.0%                |                     0 | 132 / 132                      |                    0 | 0.0%                               |
+|         16 | 0.0%                |                     0 | 132 / 132                      |                    0 | 0.0%                               |

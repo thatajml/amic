@@ -1,5 +1,8 @@
 """RoutePlanner: Route -> RetrievalPlan + token budget. Shared by all arms so routes mean the
-same thing everywhere (the `always` arm's DEEP is exactly AMIC's DEEP)."""
+same thing everywhere (the `always` arm's DEEP is exactly AMIC's DEEP).
+
+Stores per route come from RouteConfig (default M1 only, as in the first results; with M2:
+SHALLOW = top facts, DEEP = wide M1 + MMR plus facts)."""
 
 from __future__ import annotations
 
@@ -14,13 +17,14 @@ class RoutePlanner:
     def plan(self, route: Route) -> RetrievalPlan:
         c = self.cfg
         if route == Route.SHALLOW:
-            # sprint simplification: M1 top-k stands in for "M3 block + top-2/3 from M2"
             return RetrievalPlan(
-                stores=[MemoryTier.M1], k=c.shallow_k, token_budget=c.shallow_token_budget
+                stores=[MemoryTier(s) for s in c.shallow_stores],
+                k=c.shallow_k,
+                token_budget=c.shallow_token_budget,
             )
         if route == Route.DEEP:
             return RetrievalPlan(
-                stores=[MemoryTier.M1],
+                stores=[MemoryTier(s) for s in c.deep_stores],
                 k=c.deep_k,
                 mmr=c.deep_mmr,
                 token_budget=c.deep_token_budget,

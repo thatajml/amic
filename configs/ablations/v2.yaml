@@ -1,0 +1,9 @@
+# The full AMIC v2 system (pre-registered V1). Combine, in this order:
+#   --config configs/ablations/full.yaml configs/ablations/escalate.yaml \
+#            configs/ablations/m2.yaml configs/ablations/cache.yaml configs/ablations/v2.yaml
+# = Tier 0 + Tier 1 + Tier 2 (band from full.yaml), verify-and-escalate, M2 fact routes, decision
+# cache. This file only pins the parts that must agree across the others.
+ablation:
+  tiers: full
+  use_escalation: true
+  use_cache: true

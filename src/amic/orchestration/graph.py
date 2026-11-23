@@ -33,6 +33,7 @@ from amic.contracts.models import (
     ResolvedBy,
     Route,
     Turn,
+    WriteIntent,
 )
 from amic.generation.gateway.base import LLMResult
 
@@ -234,6 +235,7 @@ class PipelineArm:
             memory_tokens=state.get("memory_tokens", 0),
             n_items=len(state.get("items", [])),
             escalated=escalated,
+            cache_hit=d.resolved_by == ResolvedBy.CACHE,
             features=state.get("features", {}),
             oracle_label=ctx.oracle_label,
         )
@@ -253,9 +255,22 @@ class PipelineArm:
         now = ctx.now or datetime.now(UTC)
 
         def job() -> None:
-            self.c.writer.write_turn(
-                ctx.tenant_id, ctx.session_id, ctx.request_id, ctx.query, resp.answer, now
+            # P5: the response path only enqueues; consolidation (M1, facts into M2, version
+            # bump) runs in the worker, or right here for the inline queue
+            intent = WriteIntent(
+                tenant_id=ctx.tenant_id,
+                session_id=ctx.session_id,
+                record_id=ctx.request_id,
+                query=ctx.query,
+                answer=resp.answer,
+                ts=now,
             )
+            if self.c.write_queue is not None:
+                self.c.write_queue.enqueue(intent)
+            else:
+                self.c.writer.write_turn(
+                    ctx.tenant_id, ctx.session_id, ctx.request_id, ctx.query, resp.answer, now
+                )
 
         return resp, job
 

@@ -28,32 +28,44 @@ query ──► signal bus (embed once; S1 lexical, S2 session, S3 memory sketch
 
 ## Status (2026-11-23)
 
-Milestones 0–4 and 8 of the brief are implemented; Tier 2, verification/escalation and fact
-extraction are future work (see [docs/PLAN.md](docs/PLAN.md) §1). The full evaluation has been run:
-805 labelled probes (two LLM-judge judgments each, 98 hand labels), seven live runs × 3 seeds on
-the held-out test split, and pairwise quality judging of every run against `always`.
+Every component of the brief except the M3 learner profile, DEEP rerank/entity hop and the
+Educator Console is implemented: Tier 0/1/2 with cost-sensitive thresholds, the M4 sketch,
+verify-and-escalate, the decision cache, M1 episodic + M2 fact memory with validity intervals, an
+async write path (SQLite or Redis Streams queue + ConsolidationWorker), and LongMemEval. The first
+evaluation (805 labelled probes, 98 hand labels, seven live runs × 3 seeds, pairwise judging)
+was followed by a **pre-registered extension** for the later components
+([docs/PLAN.md](docs/PLAN.md) section 9). All intervals are 95% cluster-bootstrap CIs.
 
-**Headline results** (test split, 161 probes × 3 seeds; details and caveats in
-[docs/results/main.md](docs/results/main.md)):
+**Education set** (test split, 161 probes × 3 seeds; net win = pairwise wins − losses vs `always`):
 
-| Run | Memory tokens / query | Saved vs `always` | Net win vs `always` |
-|---|---|---|---|
-| `always` (DEEP every turn) | 800 | – | 0 |
-| `amic` (λ = 4) | 369 | 54% | −6.8 pts |
-| `always_shallow` (SHALLOW every turn, no gate) | 314 | 61% | −4.3 pts |
-| `amic_lam1` (λ = 1) | 269 | 66% | −19.5 pts |
-| `oracle` (labels) | 239 | 70% | −18.4 pts |
-| `never` | 0 | 100% | −62.9 pts |
+| Run | Memory tokens / query | Net win vs `always` (learner CI) |
+|---|---|---|
+| `always` (DEEP every turn) | 800 | 0 |
+| `always_shallow` (top-3 raw turns every turn, no gate) | 314 | −4.3 [−11.7, +3.1] |
+| `amic` (T0+T1, λ = 4) | 369 | −6.8 [−14.6, +1.2] |
+| `amic_esc` (+ verify-and-escalate) | 370 | −6.6 [−14.6, +1.5] |
+| `amic_full` (+ Tier 2) | 370 | −6.8 [−14.4, +0.8] |
+| `amic_lam1` (λ = 1) / `amic_lam1_esc` | 269 / 290 | −19.5 / −15.1 |
+| `always_m2` (top-3 extracted facts every turn) | 69 | −40.4 [−46.6, −33.8] |
+| `amic_v2` (full system: T0–T2, cache, escalation, M2 routes) | 200 | −30.0 [−36.4, −22.9] |
+| `never` | 0 | −62.9 |
 
-- **SHALLOW retrieval is as good as DEEP** for this dataset and saves ~60% of memory tokens.
-- **Skipping memory hurts**: a SKIP loses ~70% of pairwise comparisons, even when the oracle
-  label said memory was not needed.
-- **The gate does not beat the simple always-SHALLOW baseline** here: `always_shallow` uses fewer
-  tokens with better quality than `amic`. The S3 sketch ablation changes nothing measurable.
-- **The gate is cheap** (~2 ms per query vs 10–150 ms of retrieval + prefill saved), so the
-  break-even inequality holds; end-to-end latency barely changes because decoding dominates.
-- **Labels are the main limitation**: human vs judge Cohen's κ = 0.26, and the judge's necessity
-  label disagrees with its own pairwise preferences on SKIP.
+**LongMemEval_S** (cleaned; gold-answer accuracy on a stratified 150; gate decisions on all 500):
+`always` 45.8%, `always_shallow` 45.8% with 4× fewer memory tokens, `amic` 48.3%, `never` 5.0%.
+The education-trained gate retrieves on 100% of LongMemEval questions.
+
+- **SHALLOW retrieval is as good as DEEP**, on the education set and on LongMemEval's objective
+  accuracy, at 60–75% fewer memory tokens.
+- **Skipping memory hurts**: SKIPs lose ~70% of pairwise comparisons, even the oracle's.
+- **The gate does not beat always-SHALLOW**; the S3 sketch probe and Tier 2 change nothing
+  measurable (`amic_full − amic` = +0.0).
+- **Verify-and-escalate recovers part of the loss only where skipping is frequent** (+4.3 pts at
+  λ = 1, +18.8 for `never`), and gating first beats verifying afterwards by 37.5 pts.
+- **Extracted facts are far cheaper but much worse** than raw turns (−36 pts vs `always_shallow`).
+- **The async write path** takes the write off the response path: 2 ms to enqueue vs 17 ms
+  inline (4.5 s with fact extraction).
+- **Labels and the judge bound everything**: human vs judge κ = 0.26; the judge agrees with
+  itself on ~73% of identical pairs judged twice.
 
 ## Quick start
 
@@ -108,6 +120,34 @@ python scripts/judge_pairwise.py --runs amic never oracle amic_lam1 amic_no_s3 a
 python -m amic.eval.report                                 # → docs/results/main.md
 ```
 
+Extension (pre-registered, docs/PLAN.md section 9); tutor answers come from the generation
+cache and identical answer pairs reuse earlier verdicts (`--reuse-from`):
+
+```bash
+A=configs/ablations
+# verify-and-escalate (E1-E4) and Tier 2 (T1, T2)
+python -m amic.eval.runner --arms amic  --name amic_esc      --config $A/escalate.yaml
+python -m amic.eval.runner --arms amic  --name amic_lam1_esc --config $A/lam1_escalate.yaml
+python -m amic.eval.runner --arms never --name never_esc     --config $A/escalate.yaml
+python scripts/replay_verify.py --runs never amic amic_lam1
+python scripts/tune_band.py --rate 0.12 && python scripts/replay_tier2.py
+python -m amic.eval.runner --arms amic  --name amic_full     --config $A/full.yaml
+# M2 facts, the full system, cache and write path (F1, V1, C1, W1)
+python scripts/extract_facts.py
+python -m amic.eval.runner --arms always --name always_m2 --config $A/m2.yaml $A/always_shallow.yaml
+python -m amic.eval.runner --arms amic --name amic_v2 --config $A/full.yaml $A/escalate.yaml $A/m2.yaml $A/cache.yaml $A/v2.yaml
+python scripts/replay_cache.py && python scripts/bench_writepath.py && python scripts/bench_writepath.py --extract
+python scripts/judge_pairwise.py --runs amic_esc --reuse-from amic always_shallow   # etc. per run
+# LongMemEval (L1, L2): download per amic/eval/datasets/longmemeval.py, then
+python scripts/prepare_longmemeval.py --device cuda
+python -m amic.eval.runner --arms always --name lme_always --dataset longmemeval --seeds 1 --temperature 0 --config configs/longmemeval.yaml
+python scripts/judge_longmemeval.py --runs lme_always lme_always_shallow lme_never lme_amic lme_amic_esc
+python -m amic.eval.report
+```
+
+The async worker for a live service: `python -m amic.writepath.worker` (set
+`AMIC_WRITEPATH__QUEUE=sqlite` or `redis`, and `AMIC_WRITEPATH__EXTRACT_FACTS=true` for M2).
+
 Decision-quality ablations and the λ sweep are replayed offline from stored features (no LLM
 calls); only response quality needs generation.
 
@@ -131,6 +171,7 @@ docs/             brief, plan, generated results
 ## Branches
 
 - `main`: the system, experiments and results.
+- Paper artefacts (data, answers, judgments, models): GitHub releases `artifacts-2026-11-23*`.
 - `ui-chat`: a Streamlit chat UI to run any LLM (local Ollama or any OpenAI-compatible API) with
   AMIC and inspect each decision. Not merged yet.
 - `dashboard-and-startup-command`: usage/cost dashboard and a one-command startup. Not merged yet.

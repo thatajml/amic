@@ -71,8 +71,10 @@ def create_app(comps: Components | None = None) -> FastAPI:
         """Per-learner erasure (synchronous by design, plan R6)."""
         c = _comps()
         n = c.episodic.delete_tenant(tenant_id)
+        facts = c.semantic.delete_tenant(tenant_id) if c.semantic is not None else 0
+        # also sets a new memory version: the M4 sketch and cached decisions are dropped
         c.sessions.erase_tenant(tenant_id)
-        return {"deleted_records": n}
+        return {"deleted_records": n, "deleted_facts": facts}
 
     return app
 

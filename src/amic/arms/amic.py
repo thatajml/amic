@@ -50,7 +50,15 @@ class AmicArm(PipelineArm):
         self.bus = SignalBus(
             comps.embedder, comps.sketches, comps.sessions, s.ablation.use_sketch_probe
         )
-        self.controller = Controller(s, comps.planner, tier1, self.bus, tier2)
+        self.controller = Controller(
+            s,
+            comps.planner,
+            tier1,
+            self.bus,
+            tier2,
+            cache=comps.decision_cache,
+            version_fn=comps.sessions.mem_version,
+        )
 
     def decide(self, state: RunState) -> dict[str, Any]:
         sig = self.bus.extract(state["ctx"])
@@ -60,6 +68,7 @@ class AmicArm(PipelineArm):
             "embed": sig.embed_ms,
             "signals": sig.feat_ms,
             "tier0": tm.tier0,
+            "cache": tm.cache,
             "tier1": tm.tier1,
             "tier2": tm.tier2,
         }

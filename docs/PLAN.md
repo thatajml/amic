@@ -28,9 +28,16 @@ four-arm runner with ablations · break-even table · minimal Decision Inspector
 - Writes are synchronous after the response is returned (a background task), not a Redis-stream worker.
 - DEEP = wide-k + MMR. Cross-encoder rerank and the entity hop come later.
 
-**Out (future work in the paper, in this order):** M5 remainder (M2 + async worker + DecisionCache) → M7 verify and
+**Out of the 7-day sprint:** M5 remainder (M2 + async worker + DecisionCache) → M7 verify and
 escalate → M6 Tier 2 + distillation → full docker-compose app → Educator Console → LongMemEval.
-The design degrades cleanly to Tier 0 + Tier 1 (§10), so cutting these needs no redesign.
+The design degrades cleanly to Tier 0 + Tier 1 (§10), so cutting these needed no redesign.
+
+**Update 2026-11-23:** built afterwards as a pre-registered extension (section 9): M2 facts with
+validity intervals, the async write path (SQLite / Redis Streams queue + ConsolidationWorker), the
+DecisionCache, verify-and-escalate, Tier 2 + distillation buffer, and LongMemEval. Still future
+work: the M3 learner profile, cross-encoder rerank and entity hop in DEEP, the ForgettingManager
+beyond per-learner erasure, the Educator Console, and the docker-compose app (on the
+`dashboard-and-startup-command` branch, not merged).
 
 **Key efficiency idea:** gate decisions can be **replayed offline**. Once each query's
 FeatureVector, oracle label and per-arm cost are logged, every ablation and λ sweep on *decision*
@@ -363,3 +370,15 @@ Fixed settings: verifier mode `both`, escalation route SHALLOW (at most one retr
 sized to 12% of validation traffic with a hard 12% cap and an 800 ms timeout (both fail open to
 SHALLOW), cache key = (learner, memory version, 16-bit LSH of the query vector, M0 present),
 TTL 15 min. LongMemEval runs at temperature 0, one run per arm, with the edu-trained Tier 1.
+
+**Deviations recorded while running the extension (none changes a pre-registered comparison)**
+- Decision rule tightened before any extension run: BOTH the probe- and the learner-clustered CI
+  must exclude 0 (the learner bootstrap alone flagged `amic_no_s3` vs `always`, which the probe
+  bootstrap does not; with 8 learners it undercovers).
+- Tier 2 and the LLM verifier run on `llama3.1:8b`, not the brief's 3B model: on the 8 GB GPU
+  Ollama cannot keep both resident (5.28 GB + 2.21 GB; one is evicted per load).
+- Tier-2 band: isotonic calibration leaves 8 distinct p values on validation (53 of 134 rows at
+  one value), so no band holds exactly 12%. The brief sets a ceiling, so the band is the widest
+  one at or under 12% of validation traffic: [0, 0.27], 4.4% of validation, 6.8% of test.
+- LongMemEval: the escalation run reuses the tutoring verifier prompt; record ids include the
+  session position (session ids repeat inside some haystacks).

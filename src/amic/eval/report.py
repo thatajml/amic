@@ -268,6 +268,125 @@ def section_tier2() -> str:
     return "\n".join(lines) + "\n"
 
 
+LME_RUNS = ["lme_always", "lme_always_shallow", "lme_never", "lme_amic", "lme_amic_esc"]
+LME_PAIRS = [
+    ("lme_amic", "lme_always"),
+    ("lme_amic", "lme_always_shallow"),
+    ("lme_amic_esc", "lme_amic"),
+    ("lme_always_shallow", "lme_always"),
+    ("lme_never", "lme_always"),
+]
+
+
+def section_longmemeval() -> str:
+    """LongMemEval_S (pre-registered L1 decisions, L2 gold-answer QA accuracy)."""
+    d = Path("data/longmemeval")
+    if not (d / "features.parquet").exists() or not Path("models/tier1.joblib").exists():
+        return ""
+    lam = Settings().gate.lam
+    df = load_dataset("longmemeval")
+    ans = df[df.label_required.astype(bool)]
+    dec_rows = _decision_rows(df, lam)
+    abst = df[~df.label_required.astype(bool)].probe_id
+    t1 = Tier1Model.load("models/tier1.joblib")
+    amic_dec = replay(df, load_settings(), t1)
+    by_type = (
+        amic_dec.merge(df[["probe_id", "category"]], on="probe_id", suffixes=("", "_c"))
+        .assign(retrieve=lambda x: x.route.isin(list(RETRIEVE)))
+        .groupby("category")
+        .agg(n=("probe_id", "size"), amic_retrieval_rate=("retrieve", "mean"))
+        .reset_index()
+    )
+    lines = [
+        "## 11. LongMemEval_S, cleaned (external check; pre-registered L1, L2)",
+        "",
+        f"{len(df)} questions, each with its own ~48-session history ({len(ans)} answerable = "
+        f"memory-required; {len(abst)} abstention questions = weak memory-not-required analogue). "
+        "Tier 1 is the education-trained model, unchanged; S4 concept features are Python-specific, "
+        "so this measures transfer. Decisions are replayed from features computed with the live "
+        "bus code (`scripts/prepare_longmemeval.py`).",
+        "",
+        _fmt(
+            dec_rows[
+                ["policy", "retrieval_rate", "recall", "false_skip_rate", "cost", "cost_vs_always"]
+            ],
+            pct=["retrieval_rate", "recall", "false_skip_rate"],
+            dec={"cost": 3},
+        ),
+        "",
+        "AMIC (T0+T1) retrieval rate by question type:",
+        "",
+        _fmt(by_type, pct=["amic_retrieval_rate"]),
+    ]
+    qa = []
+    judged: dict[str, pd.DataFrame] = {}
+    gold = pd.read_json(d / "gold.jsonl", lines=True)[["probe_id", "question_type", "abstention"]]
+    for run in LME_RUNS:
+        p = Path("runs") / run / "lme_judged.jsonl"
+        if not p.exists():
+            continue
+        j = pd.read_json(p, lines=True).merge(gold, on="probe_id")
+        j["score"] = j.correct.astype(float)
+        judged[run] = j
+        a, b = j[~j.abstention], j[j.abstention]
+        row: dict[str, Any] = {
+            "run": run,
+            "n": len(j),
+            "accuracy (answerable, 95% CI)": fmt_ci(*mean_ci(a.score, a.probe_id), signed=False),
+            "abstention accuracy": f"{b.score.mean():.1%} (n={len(b)})" if len(b) else "",
+            "retrieval_rate": j.final_route.isin(list(RETRIEVE)).mean(),
+        }
+        for t, g in a.groupby("question_type"):
+            row[t] = g.score.mean()
+        qa.append(row)
+    if qa:
+        tr = _traces("lme-")
+        q = pd.DataFrame(qa)
+        if tr is not None and not tr.empty:
+            q["memory_tokens"] = q.run.map(tr.groupby("arm").memory_tokens.mean())
+        type_cols = [c for c in q.columns if c in lme_types()]
+        lines += [
+            "",
+            "### Gold-answer QA accuracy (live, stratified subset, temperature 0)",
+            "",
+            "Every abstention question plus 20 answerable questions per type; one run per arm at "
+            "temperature 0; graded yes/no against the gold answer by the Gemini judge with "
+            "per-type rules following the official protocol (`scripts/judge_longmemeval.py`). "
+            "CIs: bootstrap over questions.",
+            "",
+            _fmt(q, pct=["retrieval_rate", *type_cols], dec={"memory_tokens": 0}),
+        ]
+        pr = []
+        for a_run, b_run in LME_PAIRS:
+            if a_run in judged and b_run in judged:
+                m = judged[a_run].merge(
+                    judged[b_run], on=["probe_id", "seed"], suffixes=("_a", "_b")
+                )
+                m = m[~m.abstention_a]
+                diff = m.score_a - m.score_b
+                pr.append(
+                    {
+                        "comparison": f"{a_run} − {b_run}",
+                        "questions": len(m),
+                        "accuracy diff (95% CI)": fmt_ci(*mean_ci(diff, m.probe_id)),
+                    }
+                )
+        if pr:
+            lines += [
+                "",
+                "Paired accuracy differences (answerable questions):",
+                "",
+                _fmt(pd.DataFrame(pr)),
+            ]
+    return "\n".join(lines) + "\n"
+
+
+def lme_types() -> list[str]:
+    from amic.eval.datasets.longmemeval import TYPES
+
+    return TYPES
+
+
 def section_decisions() -> tuple[str, pd.DataFrame | None]:
     if not Path("data/edu/labels.parquet").exists() or not Path("models/tier1.joblib").exists():
         return "## 2. Decision quality\n\n_needs labels + models/tier1.joblib_\n", None
@@ -894,6 +1013,92 @@ def section_escalation(tr: pd.DataFrame | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def section_memory_system() -> str:
+    """M2 facts, the async write path and the decision cache (pre-registered F1 stats, W1, C1)."""
+    lines: list[str] = []
+    done = Path("data/edu/facts_done.jsonl")
+    if done.exists():
+        f = pd.read_json(done, lines=True)
+        lines += [
+            "### M2 fact extraction (seeded education histories)",
+            "",
+            f"{len(f)} past sessions consolidated by `scripts/extract_facts.py` (one LLM call per "
+            f"session, salient exchanges only). Facts extracted: {int(f['facts'].sum())} "
+            f"({f['facts'].mean():.1f} per session). Resolution: inserted {int(f['insert'].sum())}, "
+            f"superseded an older fact {int(f['update'].sum())}, refreshed {int(f['refresh'].sum())}, "
+            f"skipped as duplicates {int(f['skip'].sum())}. Superseded facts are closed (validity "
+            "interval ended), never deleted; routes read current facts only.",
+            "",
+        ]
+    wp = Path("runs/writepath_bench.json")
+    if wp.exists():
+        j = json.loads(wp.read_text())
+        rows = []
+        for name, r in j.items():
+            for m in ("inline_write_ms", "enqueue_ms", "enqueue_to_visible_ms"):
+                rows.append(
+                    {
+                        "variant": name,
+                        "measure": m,
+                        "n": r[m]["n"],
+                        "p50 ms": r[m]["p50"],
+                        "p95 ms": r[m]["p95"],
+                    }
+                )
+        lines += [
+            "### Async write path (W1)",
+            "",
+            "Response-path cost of the long-term write: before, the whole consolidation ran inline "
+            "after the answer (`inline_write_ms`); now the response path only enqueues "
+            "(`enqueue_ms`, SQLite queue) and the ConsolidationWorker makes the turn visible "
+            "later (`enqueue_to_visible_ms`: queue wait + consolidation). "
+            "`scripts/bench_writepath.py`, real embedder and LLM, scratch Chroma collection.",
+            "",
+            _fmt(pd.DataFrame(rows), dec={"p50 ms": 1, "p95 ms": 1}),
+            "",
+        ]
+    cr = Path("runs/cache_replay.json")
+    if cr.exists():
+        j = json.loads(cr.read_text())
+        rows = []
+        for nb in (8, 12, 16):
+            r = j.get(f"bits_{nb}")
+            if not r:
+                continue
+            nat, rep = r["natural"], r["repeat"]
+            rows.append(
+                {
+                    "LSH bits": nb,
+                    "natural: hit rate": nat["hits"] / max(1, nat["eligible"]),
+                    "natural: wrong hits": nat["wrong_hits"],
+                    # each probe is asked twice; coarse keys can also hit on a first ask
+                    "repeat stream: hits / probes": f"{rep['hits']} / {rep['eligible'] // 2}",
+                    "repeat: wrong hits": rep["wrong_hits"],
+                    "false sharing (distinct queries)": r["false_sharing_rate"],
+                }
+            )
+        lines += [
+            "### Decision cache (C1, offline replay on the test split)",
+            "",
+            "The base gate replayed in the live runs' order with the cache in front of Tier 1 "
+            "(Tier-0 decisions are never cached). `natural`: each test probe once, the order the "
+            "live runs used; `repeat`: each probe asked twice in a row (a hit on every second ask = hits equal probes); `false sharing`: share of "
+            "a learner's distinct queries that fall into a bucket an earlier query already used.",
+            "",
+            _fmt(
+                pd.DataFrame(rows),
+                pct=[
+                    "natural: hit rate",
+                    "false sharing (distinct queries)",
+                ],
+            ),
+        ]
+    if not lines:
+        return ""
+    title = "## 12. Memory system: M2 facts, write path, decision cache"
+    return "\n".join([title, "", *lines]) + "\n"
+
+
 def section_summary(tr: pd.DataFrame | None) -> str:
     """Token use vs quality for every live run, side by side (the efficiency/quality frontier)."""
     if tr is None or "always" not in set(tr.arm):
@@ -959,6 +1164,8 @@ def main() -> None:
     parts.append(section_summary(tr))
     parts.append(section_escalation(tr))
     parts.append(section_tier2())
+    parts.append(section_longmemeval())
+    parts.append(section_memory_system())
     md = "\n".join(p for p in parts if p)
     (OUT / "main.md").write_text(md, encoding="utf-8")
     print(md)

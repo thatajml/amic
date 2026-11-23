@@ -27,7 +27,7 @@ def test_chat_health_and_background_write(comps):
             json={"tenant_id": "zoe", "session_id": "s1", "query": "and a set?", "arm": "never"},
         )
         assert r2.json()["decision"]["route"] == "SKIP"
-        assert client.delete("/learners/zoe").json() == {"deleted_records": 2}
+        assert client.delete("/learners/zoe").json() == {"deleted_records": 2, "deleted_facts": 0}
         assert comps.episodic.count("zoe") == 0
 
 

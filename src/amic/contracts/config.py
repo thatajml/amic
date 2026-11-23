@@ -44,6 +44,30 @@ class RouteConfig(BaseModel):
     always_route: Literal["SHALLOW", "DEEP"] = "DEEP"
     shallow_token_budget: int = 400
     deep_token_budget: int = 1000
+    # Which stores each route reads. Brief: SHALLOW = profile + top M2 facts, DEEP = M1 + M2.
+    # Defaults keep the first results' M1-only routes; configs/ablations/m2.yaml switches.
+    shallow_stores: list[Literal["M1", "M2"]] = Field(default_factory=lambda: ["M1"])
+    deep_stores: list[Literal["M1", "M2"]] = Field(default_factory=lambda: ["M1"])
+    m2_k: int = 5  # facts added to a route that also reads M1
+
+
+class WritePathConfig(BaseModel):
+    """Async write path (L7). `inline` consolidates right after the response (no worker);
+    `sqlite` / `redis` only enqueue, and `python -m amic.writepath.worker` consolidates."""
+
+    queue: Literal["inline", "sqlite", "redis"] = "inline"
+    queue_db: str = "data/writequeue.sqlite"
+    stream: str = "amic:writes"
+    group: str = "consolidators"
+    extract_facts: bool = False  # LLM fact extraction into M2 (needs the gate model)
+    salience_min_words: int = 4
+
+
+class CacheConfig(BaseModel):
+    """DecisionCache (brief 6.4), on with ablation.use_cache."""
+
+    nbits: int = 16  # LSH bits of the query vector
+    ttl_s: float = 900.0
 
 
 class VerifyConfig(BaseModel):
@@ -92,6 +116,8 @@ class Settings(BaseSettings):
     routes: RouteConfig = Field(default_factory=RouteConfig)
     models: ModelConfig = Field(default_factory=ModelConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
+    writepath: WritePathConfig = Field(default_factory=WritePathConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
     session_backend: Literal["redis", "sqlite"] = "redis"  # sqlite: offline runs, no Docker
     session_db: str = "data/sessions.sqlite"
     redis_url: str = "redis://localhost:6379/0"

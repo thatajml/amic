@@ -9,6 +9,7 @@ from typing import Any
 from amic.contracts.config import Settings
 from amic.contracts.interfaces import TelemetryCollector
 from amic.contracts.models import ArmName, RequestContext
+from amic.control.cache import DecisionCache
 from amic.control.route_planner import RoutePlanner
 from amic.generation.gateway.base import LLMGateway
 from amic.generation.prompt import PromptBuilder
@@ -18,6 +19,7 @@ from amic.memory.embedder import Embedder
 from amic.memory.retrieval import ChromaRetrievalEngine
 from amic.memory.sketch import EpisodicSketchStore
 from amic.memory.stores.episodic import EpisodicStore, make_chroma_client
+from amic.memory.stores.semantic import SemanticStore
 from amic.orchestration.graph import PipelineArm, new_request_id
 from amic.service.session import SessionManager, SqliteSessionManager
 from amic.writepath.writer import MemoryWriter
@@ -41,6 +43,28 @@ class Components:
     extras: dict[str, Any] = field(default_factory=dict)
     verifier: ResponseVerifier | None = None  # set when ablation.use_escalation is on
     gate_llm: LLMGateway | None = None  # Tier 2 / verifier model (models.tier2)
+    semantic: SemanticStore | None = None  # M2 facts
+    decision_cache: DecisionCache | None = None  # set when ablation.use_cache is on
+    write_queue: Any = None  # WriteIntentQueue: where answered turns go (see build_queue)
+
+
+def build_queue(comps: Components, for_worker: bool = False) -> Any:
+    """The WriteIntentQueue from settings.writepath.queue. `inline` consolidates in-process right
+    after the response (the pre-queue behaviour); `sqlite` / `redis` only enqueue, and the
+    ConsolidationWorker process consumes."""
+    from amic.writepath.queue import InlineQueue, RedisStreamQueue, SqliteWriteQueue
+    from amic.writepath.worker import build_worker
+
+    w = comps.settings.writepath
+    if w.queue == "inline":
+        return InlineQueue(build_worker(comps).process)
+    if w.queue == "sqlite":
+        return SqliteWriteQueue(w.queue_db)
+    redis = comps.extras.get("redis")
+    if redis is None:
+        raise RuntimeError("writepath.queue=redis needs the Redis session backend")
+    consumer = "worker" if for_worker else "api"
+    return RedisStreamQueue(redis, w.stream, w.group, consumer)
 
 
 def gate_llm_from_settings(s: Settings, timeout_s: float | None = None) -> LLMGateway:
@@ -130,11 +154,12 @@ def build_components(
         if gate_llm is None and s.verify.mode != "lexical":
             gate_llm = gate_llm_from_settings(s, timeout_s=10.0)
         verifier = ResponseVerifier(s.verify.mode, gate_llm, s.verify.llm_max_tokens)
-    return Components(
+    semantic = SemanticStore(chroma_client, s.chroma_collection, s.chroma_mode)
+    comps = Components(
         settings=s,
         embedder=embedder,
         episodic=episodic,
-        retrieval=ChromaRetrievalEngine(episodic, s.routes),
+        retrieval=ChromaRetrievalEngine(episodic, s.routes, semantic),
         assembler=ContextAssembler(),
         prompts=PromptBuilder.for_profile(s.prompt_profile),
         llm=llm,
@@ -146,7 +171,15 @@ def build_components(
         config_hash=s.config_hash(),
         verifier=verifier,
         gate_llm=gate_llm,
+        semantic=semantic,
+        decision_cache=(
+            DecisionCache(s.cache.nbits, s.cache.ttl_s) if s.ablation.use_cache else None
+        ),
     )
+    if redis is not None:
+        comps.extras["redis"] = redis
+    comps.write_queue = build_queue(comps)
+    return comps
 
 
 def build_arm(name: ArmName, comps: Components) -> PipelineArm:

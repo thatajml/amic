@@ -1,0 +1,8 @@
+# M2 fact memory in the routes (pre-registered F1, V1): SHALLOW = the top facts (M2) instead of
+# the top raw turns; DEEP = wide M1 + MMR plus facts. Facts come from scripts/extract_facts.py
+# (collection <collection>_facts). Run always_m2 with: --arms always --config configs/ablations/m2.yaml
+# configs/ablations/always_shallow.yaml
+routes:
+  shallow_stores: [M2]
+  deep_stores: [M1, M2]
+  m2_k: 5
