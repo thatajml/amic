@@ -27,8 +27,9 @@ dependencies = [
     "sentence-transformers>=3.2",
     # L5 vector store
     "chromadb>=0.5.20",
-    # L2/L7 session state + WriteIntent stream
-    "redis>=5.2",
+    # L2/L7 session state + WriteIntent stream. <8.2: fakeredis 2.40 (the test double) fails
+    # on redis 8.2 ("method_descriptor has no __closure__"); CI broke on it 2026-11-23.
+    "redis>=5.2,<8.2",
     # L8 telemetry / metrics store (SQLite via SQLAlchemy; Parquet export)
     "sqlalchemy>=2.0",
     "pandas>=2.2",
