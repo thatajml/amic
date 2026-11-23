@@ -382,3 +382,32 @@ TTL 15 min. LongMemEval runs at temperature 0, one run per arm, with the edu-tra
   one at or under 12% of validation traffic: [0, 0.27], 4.4% of validation, 6.8% of test.
 - LongMemEval: the escalation run reuses the tutoring verifier prompt; record ids include the
   session position (session ids repeat inside some haystacks).
+
+## 10. Completion (2026-11-23): the rest of the brief, pre-registered
+
+After section 9, the remaining brief components are being built: the M3 learner profile (EWMA
+mastery, updated by the worker), the brief's SHALLOW route (M3 + top M2 facts) and DEEP route (wide
+M1 + M2 + M3, MMR, cross-encoder rerank, one entity hop), the WRITE route (`/remember`,
+`/forget`), the ForgettingManager (decay, TTL, compaction, erasure), the S5 uncertainty signal,
+the distillation retrain of Tier 1, scheduled jobs (retrain, threshold recalibration,
+forgetting), shadow mode against `always`, performance-budget tests, a CI gate-metric regression
+check, real-Redis tests, and the Educator Console. Section 9's rules and decision rule apply
+unchanged; this section is committed **before any of its runs**.
+
+| ID | Comparison | Primary metric | Data |
+|---|---|---|---|
+| P1 | `always_m3` − `always_shallow` (brief SHALLOW: M3 + top-3 M2 facts, vs top-3 M1 turns) | paired net win vs `always`; memory tokens | edu test, 3 seeds |
+| D1 | `always_deep2` − `always` (brief DEEP: M1+M2+M3, MMR, rerank, 1 hop, vs wide M1 + MMR) | same | same |
+| V3 | `amic_v3` vs `always`, vs `always_shallow` (Tier 0-2, cache, escalation, P1 and D1 routes) | net win; memory tokens | same |
+| S1 | Tier 1 + S5 (draft-entropy features) − Tier 1 (offline replay, retrained on train) | test AUC difference; expected cost at lambda = 4 | edu test |
+| DS1 | Tier 1 retrained with Tier-2 distilled weak labels (weight 0.5 and 1.0) − Tier 1 | same | edu test |
+| PB1 | performance budgets: Tier 0, Tier 0+1, sketch affinity at 10^2 / 10^3 / 10^4 records | p50 / p95 ms (measured; CI asserts loose bounds) | synthetic |
+
+Fixed settings: M3 EWMA alpha 0.3, prior 0.5, block <= 200 tokens; SHALLOW = M3 + 3 facts
+(budget 400 tokens); DEEP = k 12 from a pool of 30 M1 + 10 M2 candidates, MMR lambda 0.7,
+`cross-encoder/ms-marco-MiniLM-L-6-v2` on CPU, one hop (<= 4 entities from the top 5 candidates,
+<= 4 extra candidates per store), budget 1000 tokens. Profiles are rebuilt from the frozen
+history and its extracted facts (`scripts/build_profiles.py`, no LLM). S5: a 16-token draft of
+the memory-less answer (same prompt as SKIP, temperature 0) from the tutor model; features = mean
+and max token entropy over the top-5 logprobs. Distillation: the 395 Tier-2 verdicts on the
+train split (`data/distill/replay_train.jsonl`) as extra rows, label = verdict != SKIP.
