@@ -87,7 +87,9 @@ def test_mastery_decays_back_to_the_prior():
 @pytest.mark.parametrize("kv", ["sqlite", "redis"])
 def test_profile_store_roundtrip(kv, tmp_path):
     store = ProfileStore(
-        SqliteKV(str(tmp_path / "p.sqlite")) if kv == "sqlite" else RedisKV(fakeredis.FakeRedis())
+        SqliteKV(str(tmp_path / "p.sqlite"))
+        if kv == "sqlite"
+        else RedisKV(fakeredis.FakeRedis(server=fakeredis.FakeServer()))
     )
     p = store.get_or_new("bob")
     p.observe_turn("my list index is out of range error", T)

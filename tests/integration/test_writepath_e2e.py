@@ -46,7 +46,7 @@ def _comps(chroma_client, tmp_path, **over):
         embedder=HashEmbedder(),
         llm=FakeLLM(),
         gate_llm=FactLLM(),  # extraction never calls a real model in tests
-        redis=fakeredis.FakeRedis(),
+        redis=fakeredis.FakeRedis(server=fakeredis.FakeServer()),
         chroma_client=chroma_client,
         telemetry=InMemoryTelemetry(),
     )

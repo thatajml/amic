@@ -418,3 +418,14 @@ history and its extracted facts (`scripts/build_profiles.py`, no LLM). S5: a 16-
 the memory-less answer (same prompt as SKIP, temperature 0) from the tutor model; features = mean
 and max token entropy over the top-5 logprobs. Distillation: the 395 Tier-2 verdicts on the
 train split (`data/distill/replay_train.jsonl`) as extra rows, label = verdict != SKIP.
+
+**Recorded while running section 10 (none changes a pre-registered comparison)**
+- The service smoke test (`scripts/smoke_service.py`: API and worker as separate processes, real
+  Redis and Chroma server) found that a turn still queued when its learner was erased was
+  consolidated afterwards and resurrected an M1 record. Fixed before reporting: erasure leaves an
+  `erased_at` tombstone, the worker drops intents from before it and purges the writes of one it
+  was consolidating when the erasure landed (regression test in tests/integration/test_commands.py).
+- S5 is measured offline only (replay); its live cost is the draft time, 357 ms p50 on the 8B
+  tutor model (data/edu/s5.parquet `s5_ms`), so no live S5 run was made.
+- DEEP v2 retrieval costs ~170 ms p50 with the cross-encoder on CPU (the GPU holds the tutor).
+

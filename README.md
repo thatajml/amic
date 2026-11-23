@@ -28,13 +28,20 @@ query ──► signal bus (embed once; S1 lexical, S2 session, S3 memory sketch
 
 ## Status (2026-11-23)
 
-Every component of the brief except the M3 learner profile, DEEP rerank/entity hop and the
-Educator Console is implemented: Tier 0/1/2 with cost-sensitive thresholds, the M4 sketch,
-verify-and-escalate, the decision cache, M1 episodic + M2 fact memory with validity intervals, an
-async write path (SQLite or Redis Streams queue + ConsolidationWorker), and LongMemEval. The first
-evaluation (805 labelled probes, 98 hand labels, seven live runs × 3 seeds, pairwise judging)
-was followed by a **pre-registered extension** for the later components
-([docs/PLAN.md](docs/PLAN.md) section 9). All intervals are 95% cluster-bootstrap CIs.
+Every component of the brief is implemented on `main`: Tier 0/1/2 with cost-sensitive thresholds,
+the S1-S5 signals and the M4 sketch, the decision cache, verify-and-escalate, M1 episodic + M2
+fact memory with validity intervals + the M3 learner profile (EWMA mastery), the brief's SHALLOW
+(M3 + top facts) and DEEP (M1 + M2 + M3, MMR, cross-encoder rerank, one entity hop) routes, the
+WRITE route (`/remember`, `/forget`), an async write path (SQLite or Redis Streams queue +
+ConsolidationWorker), the ForgettingManager (decay, TTL, compaction, erasure), scheduled jobs
+(distillation retrain, threshold recalibration, forgetting), shadow mode against `always`, the
+Educator Console, performance-budget tests and a CI gate-metric regression check. The chat UI /
+Decision Inspector and the docker-compose app + usage dashboard live on the unmerged `ui-chat`
+and `dashboard-and-startup-command` branches.
+
+The first evaluation (805 labelled probes, 98 hand labels, seven live runs × 3 seeds, pairwise
+judging) was followed by two **pre-registered extensions** for the later components
+([docs/PLAN.md](docs/PLAN.md) sections 9 and 10). All intervals are 95% cluster-bootstrap CIs.
 
 **Education set** (test split, 161 probes × 3 seeds; net win = pairwise wins − losses vs `always`):
 
@@ -48,6 +55,9 @@ was followed by a **pre-registered extension** for the later components
 | `amic_lam1` (λ = 1) / `amic_lam1_esc` | 269 / 290 | −19.5 / −15.1 |
 | `always_m2` (top-3 extracted facts every turn) | 69 | −40.4 [−46.6, −33.8] |
 | `amic_v2` (full system: T0–T2, cache, escalation, M2 routes) | 200 | −30.0 [−36.4, −22.9] |
+| `always_m3` (brief SHALLOW: M3 profile + top-3 facts every turn) | 212 | −39.3 [−46.4, −32.1] |
+| `always_deep2` (brief DEEP: M1+M2+M3, rerank, 1 hop, every turn) | 794 | −1.2 [−9.0, +6.6] |
+| `amic_v3` (brief-complete: T0–T2, cache, escalation, brief routes) | 293 | −30.4 [−39.8, −20.2] |
 | `never` | 0 | −62.9 |
 
 **LongMemEval_S** (cleaned; gold-answer accuracy on a stratified 150; gate decisions on all 500):
@@ -61,7 +71,15 @@ The education-trained gate retrieves on 100% of LongMemEval questions.
   measurable (`amic_full − amic` = +0.0).
 - **Verify-and-escalate recovers part of the loss only where skipping is frequent** (+4.3 pts at
   λ = 1, +18.8 for `never`), and gating first beats verifying afterwards by 37.5 pts.
-- **Extracted facts are far cheaper but much worse** than raw turns (−36 pts vs `always_shallow`).
+- **Extracted facts are far cheaper but much worse** than raw turns (−36 pts vs `always_shallow`);
+  adding the M3 profile does not fix it (brief SHALLOW −35 pts vs `always_shallow`).
+- **Rerank + entity hop add nothing to DEEP** (−1.2 pts, n.s.) and cost ~170 ms of retrieval.
+- **Distilling Tier 2 into Tier 1** raises test AUC by +0.04 (learner CI includes 0) and
+  changes no gate decision.
+- **The S5 uncertainty signal** (draft-token entropy) adds +0.035 AUC and −0.019 expected cost,
+  neither significant, for ~360 ms per request (the whole T0+T1 gate takes ~1 ms).
+- **Performance budgets hold**: Tier 0 < 0.001 ms, Tier 0+1 ~0.95 ms (budget 5 ms); gate signal
+  cost stays flat (0.07 ms) from 10^2 to 10^4 memory records.
 - **The async write path** takes the write off the response path: 2 ms to enqueue vs 17 ms
   inline (4.5 s with fact extraction).
 - **Labels and the judge bound everything**: human vs judge κ = 0.26; the judge agrees with
@@ -145,8 +163,33 @@ python scripts/judge_longmemeval.py --runs lme_always lme_always_shallow lme_nev
 python -m amic.eval.report
 ```
 
-The async worker for a live service: `python -m amic.writepath.worker` (set
-`AMIC_WRITEPATH__QUEUE=sqlite` or `redis`, and `AMIC_WRITEPATH__EXTRACT_FACTS=true` for M2).
+Completion (pre-registered, docs/PLAN.md section 10):
+
+```bash
+python scripts/build_profiles.py                                   # M3 from history + facts
+python -m amic.eval.runner --arms always --name always_m3 --config $A/always_shallow.yaml $A/m3.yaml
+python -m amic.eval.runner --arms always --name always_deep2 --config $A/deep_v2.yaml
+python -m amic.eval.runner --arms amic --name amic_v3 --config $A/full.yaml $A/escalate.yaml $A/cache.yaml $A/m3.yaml $A/deep_v2.yaml $A/v3.yaml
+python scripts/judge_pairwise.py --runs amic_v3 --reuse-from always_m3 always_deep2 amic_v2 amic never
+python scripts/extract_s5.py && python scripts/train_tier1.py --s5 --name tier1_s5             # S1
+python scripts/train_tier1.py --distill data/distill/replay_train.jsonl --distill-weight 0.5 --name tier1_distill05
+python scripts/compare_tier1.py tier1_distill05 tier1_distill10 tier1_distill_only tier1_s5  # S1, DS1
+python scripts/bench_gate.py                                      # PB1
+```
+
+Running the system:
+
+```bash
+uvicorn amic.service.api:app                  # API: /chat, /learners/{id} (GET, DELETE), /traces
+python -m amic.writepath.worker               # consolidation (AMIC_WRITEPATH__QUEUE=sqlite|redis;
+                                              #  AMIC_WRITEPATH__EXTRACT_FACTS=true for M2)
+python -m amic.jobs nightly --every 24        # retrain (promotion gate) + recalibrate + forget
+streamlit run ui/educator.py                  # Educator Console
+AMIC_SHADOW__ENABLED=true uvicorn ...         # shadow mode vs always; scripts/shadow_report.py
+python scripts/smoke_service.py               # API + worker processes on real Redis + Chroma
+```
+
+`/remember <text>` and `/forget <text>` in a chat are explicit memory commands (route WRITE).
 
 Decision-quality ablations and the λ sweep are replayed offline from stored features (no LLM
 calls); only response quality needs generation.

@@ -7,8 +7,10 @@ or M3 changed. Explicit commands (route WRITE):
 - `remember`: the note goes to M1 (kind "remember") and, as a confidence-1 fact, to M2 and M3;
 - `forget`: M1 records and M2 facts (current or closed) that match the text (substring, or
   cosine >= forget_sim) are hard-deleted, and matching M3 notes/misconceptions removed.
-Acknowledged only after success, so a crash re-delivers the intent (at-least-once; the M1
-upsert is idempotent by record id).
+Intents from before a learner's erasure (the `erased_at` tombstone) are dropped, and an
+erasure that overtakes an intent mid-consolidation purges what it wrote, so a queued turn can
+never resurrect an erased learner. Acknowledged only after success, so a crash re-delivers the
+intent (at-least-once; the M1 upsert is idempotent by record id).
 
     python -m amic.writepath.worker              # backend from settings.writepath.queue
     python -m amic.writepath.worker --once       # drain what is queued, then exit
@@ -41,6 +43,7 @@ class WorkerStats:
     remembered: int = 0
     forgotten: dict[str, int] = field(default_factory=lambda: {"M1": 0, "M2": 0, "M3": 0})
     failed: int = 0
+    dropped_erased: int = 0  # intents from before the learner's erasure
     ms: list[float] = field(default_factory=list)
 
 
@@ -80,14 +83,23 @@ class ConsolidationWorker:
         self.stats = WorkerStats()
 
     # ------------------------------------------------------------------ dispatch
+    def _erased_at(self, tenant_id: str) -> float:
+        fn = getattr(self.sessions, "erased_at", None)
+        return float(fn(tenant_id)) if fn is not None else 0.0
+
     def process(self, it: WriteIntent) -> None:
         t = time.perf_counter()
+        if it.ts.timestamp() <= self._erased_at(it.tenant_id):
+            self.stats.dropped_erased += 1  # said before the learner's erasure: never stored
+            return
         if it.op == "remember":
             self._remember(it)
         elif it.op == "forget":
             self._forget(it)
         else:
             self._turn(it)
+        if it.ts.timestamp() <= self._erased_at(it.tenant_id):
+            self._purge(it)  # erased while this intent was being consolidated
         self.stats.processed += 1
         self.stats.ms.append((time.perf_counter() - t) * 1000)
 
@@ -121,6 +133,23 @@ class ConsolidationWorker:
             self.stats.profile_updates += 1
             return True
         return False
+
+    def _purge(self, it: WriteIntent) -> None:
+        """Undo what this intent wrote after an erasure that overtook it."""
+        tid = it.tenant_id
+        if self.episodic is not None:
+            self.episodic.delete_ids(tid, [it.record_id])
+        if self.semantic is not None:
+            ids = [
+                f for f, _, m, _ in self.semantic.records(tid) if m.get("source") == it.record_id
+            ]
+            self.semantic.delete_ids(tid, ids)
+        if self.profiles is not None:
+            prof = self.profiles.get(tid)
+            if prof is not None and prof.updated <= it.ts.timestamp() + 1e-6:
+                self.profiles.delete(tid)  # built only from pre-erasure input
+        self.sessions.bump_mem_version(tid)
+        self.stats.dropped_erased += 1
 
     # ------------------------------------------------------------------ commands
     def _remember(self, it: WriteIntent) -> None:

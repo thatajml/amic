@@ -83,7 +83,14 @@ class SessionManager:
             s = s.decode() if isinstance(s, bytes) else s
             self._r.delete(self._turns_key(s))
         self._r.delete(key, f"{key}:sessions")
+        # tombstone: queued/in-flight writes from before this moment are dropped by the worker
+        self._r.set(f"{self._p}:tenant:{tenant_id}:erased_at", repr(time.time()))
         self.bump_mem_version(tenant_id)  # a new value, never a reset (see module docstring)
+
+    def erased_at(self, tenant_id: str) -> float:
+        """Epoch seconds of the learner's last erasure (0 = never erased)."""
+        v = self._r.get(f"{self._p}:tenant:{tenant_id}:erased_at")
+        return float(v) if v is not None else 0.0
 
     # ----------------------------------------------------------------- memory version
     def _ver_key(self, tenant_id: str) -> str:
@@ -125,7 +132,9 @@ class SqliteSessionManager:
                CREATE TABLE IF NOT EXISTS tenant_sessions (
                    tenant_id TEXT, session_id TEXT, PRIMARY KEY (tenant_id, session_id));
                CREATE TABLE IF NOT EXISTS mem_version (
-                   tenant_id TEXT PRIMARY KEY, v INTEGER NOT NULL);"""
+                   tenant_id TEXT PRIMARY KEY, v INTEGER NOT NULL);
+               CREATE TABLE IF NOT EXISTS erased (
+                   tenant_id TEXT PRIMARY KEY, ts REAL NOT NULL);"""
         )
         self._lock = threading.Lock()
         self._n = m0_turns
@@ -203,7 +212,18 @@ class SqliteSessionManager:
             self._db.executemany("DELETE FROM turns WHERE session_id=?", [(s,) for s in sess])
             self._db.execute("DELETE FROM tenant_sessions WHERE tenant_id=?", (tenant_id,))
             self._db.execute("DELETE FROM tenant WHERE tenant_id=?", (tenant_id,))
+            self._db.execute(
+                "INSERT OR REPLACE INTO erased VALUES (?, ?)", (tenant_id, time.time())
+            )
         self.bump_mem_version(tenant_id)  # a new value, never a reset (see module docstring)
+
+    def erased_at(self, tenant_id: str) -> float:
+        """Epoch seconds of the learner's last erasure (0 = never erased)."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT ts FROM erased WHERE tenant_id=?", (tenant_id,)
+            ).fetchone()
+        return float(row[0]) if row else 0.0
 
     def mem_version(self, tenant_id: str) -> int:
         with self._lock:

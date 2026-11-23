@@ -12,7 +12,7 @@ from tests.conftest import T0
 @pytest.fixture(params=["redis", "sqlite"])
 def sessions(request):
     if request.param == "redis":
-        return SessionManager(fakeredis.FakeRedis())
+        return SessionManager(fakeredis.FakeRedis(server=fakeredis.FakeServer()))
     return SqliteSessionManager(":memory:")
 
 

@@ -31,7 +31,7 @@ def comps(chroma_client) -> Components:
         s,
         embedder=HashEmbedder(),
         llm=FakeLLM(),
-        redis=fakeredis.FakeRedis(),
+        redis=fakeredis.FakeRedis(server=fakeredis.FakeServer()),
         chroma_client=chroma_client,
         telemetry=InMemoryTelemetry(),
     )

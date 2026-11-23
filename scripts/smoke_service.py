@@ -124,6 +124,14 @@ def main() -> None:
             "answer_mentions_it": "weather" in r3["answer"].lower(),
         }
         out["erase"] = cli.delete(f"/learners/{tid}").json()
+        # the recall turn may still be queued or in flight: the worker must drop / purge it
+        time.sleep(3)
+        out["settle_ms"] = wait(
+            lambda: mem()["episodes"] == 0 and mem()["facts"] == 0 and not mem()["profile"],
+            120,
+            "the erasure to hold against queued writes",
+        )
+        time.sleep(5)  # and stay empty once the worker has drained the stream
         out["after_erase"] = mem()
         r4 = chat("How do I loop over a list and print each item?")
         out["after_erase_route"] = r4["decision"]["rationale"][:2]

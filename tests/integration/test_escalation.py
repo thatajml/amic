@@ -55,7 +55,7 @@ def _comps(chroma_client, *, mode="both", needs=True, tutor=None, escalate=True)
         embedder=HashEmbedder(),
         llm=tutor or FakeLLM(),
         gate_llm=gate,
-        redis=fakeredis.FakeRedis(),
+        redis=fakeredis.FakeRedis(server=fakeredis.FakeServer()),
         chroma_client=chroma_client,
         telemetry=InMemoryTelemetry(),
     )

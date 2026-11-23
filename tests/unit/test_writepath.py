@@ -54,7 +54,7 @@ def test_sqlite_queue_leases_acks_and_redelivers(tmp_path):
 
 
 def test_redis_stream_queue_roundtrip_and_reclaim():
-    r = fakeredis.FakeRedis()
+    r = fakeredis.FakeRedis(server=fakeredis.FakeServer())
     stream = f"s-{uuid.uuid4().hex[:6]}"
     a = RedisStreamQueue(r, stream=stream, consumer="a", reclaim_idle_ms=0)
     b = RedisStreamQueue(r, stream=stream, consumer="b", reclaim_idle_ms=0)  # same group
