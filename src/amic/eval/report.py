@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from amic.contracts.config import Settings, load_settings
-from amic.control.thresholds import tau_star
+from amic.control.thresholds import ThresholdPolicy, tau_star
 from amic.control.tier1 import Tier1Model
 from amic.eval.replay import (
     RETRIEVE,
@@ -174,6 +174,98 @@ def _decision_rows(df: pd.DataFrame, lam: float) -> pd.DataFrame:
         m["savings_captured"] = savings_captured(m, base["always"], base["oracle"])
         rows.append({"policy": name, **m, "cost_vs_always": vs_always(dec)})
     return pd.DataFrame(rows)
+
+
+TIER2_VERDICTS = Path("data/edu/tier2_verdicts.jsonl")
+
+
+def section_tier2() -> str:
+    """Tier 2 (pre-registered T1): full cascade vs the same band failing open, on the test split."""
+    from amic.control.tier2 import ReplayTier2
+
+    full_cfg = Path("configs/ablations/full.yaml")
+    if not (TIER2_VERDICTS.exists() and full_cfg.exists() and Path("models/tier1.joblib").exists()):
+        return ""
+    s_full = load_settings(full_cfg)
+    lam = s_full.gate.lam
+    pol = ThresholdPolicy.from_config(s_full.gate)
+    t1 = Tier1Model.load("models/tier1.joblib")
+    df = load_dataset("edu")
+    test = df[df.split == "test"].reset_index(drop=True)
+    learners = test.set_index("probe_id").learner_id
+    model = s_full.models.tier2
+    s_open = load_settings(full_cfg, ablation={"tiers": "t0_t1"})  # same band, no Tier 2
+    s_hard = load_settings(gate={"use_band": False})
+    policies = {
+        "full cascade (Tier 2 in the band)": replay(
+            test,
+            s_full,
+            t1,
+            ReplayTier2.from_jsonl(
+                str(TIER2_VERDICTS),
+                model,
+                s_full.gate.tier2_max_rate,
+                s_full.gate.tier2_timeout_ms,
+            ),
+        ),
+        "same band, fail open to SHALLOW (no Tier 2)": replay(test, s_open, t1),
+        "hard tau (no band)": replay(test, s_hard, t1),
+        "amic as run (T0+T1, original band -> SHALLOW)": replay(test, load_settings(), t1),
+    }
+    always_cost = probe_costs(fixed_policy(test, "always"), lam)
+    rows = []
+    for name, dec in policies.items():
+        m = decision_metrics(dec, lam)
+        diff = probe_costs(dec, lam) - always_cost
+        rows.append(
+            {
+                "policy": name,
+                "retrieval_rate": m["retrieval_rate"],
+                "false_skip_rate": m["false_skip_rate"],
+                "cost": m["cost"],
+                "cost_vs_always (learner CI)": fmt_ci(
+                    *mean_ci(diff.to_numpy(), learners.reindex(diff.index).to_numpy()), pct=False
+                ),
+                "share_tier2": (dec.resolved_by == "tier2").mean(),
+                "share_failopen": (dec.resolved_by == "failopen").mean(),
+            }
+        )
+    full = policies["full cascade (Tier 2 in the band)"]
+    opened = policies["same band, fail open to SHALLOW (no Tier 2)"]
+    d = probe_costs(full, lam) - probe_costs(opened, lam)
+    d_ci = fmt_ci(*mean_ci(d.to_numpy(), learners.reindex(d.index).to_numpy()), pct=False)
+    # Tier-2 verdict quality inside the band, against the labels
+    band = full[full.tier2_status != ""]  # replay rows carry label_required already
+    v = pd.read_json(TIER2_VERDICTS, lines=True)
+    v = v[(v.model == model) & v.split.isin(["val", "test"])]
+    ok = v[v.status == "ok"]
+    lines = [
+        "## 10. Tier 2: LLM adjudicator in the uncertain band (extension; pre-registered T1)",
+        "",
+        f"Band [{pol.tau_low:.3f}, {pol.tau_high:.3f}] around tau* = {pol.tau:.2f}, from "
+        "`configs/ablations/full.yaml` (sized on the validation "
+        "split by `scripts/tune_band.py` to the widest band holding at most 12% of traffic: "
+        "isotonic calibration leaves only a few distinct p values, so the band holds less). "
+        f"Tier 2 = `{model}` (the brief's 3B model cannot stay resident next to the tutor on the "
+        "8 GB GPU), constrained JSON, 800 ms timeout and 12% traffic cap, both failing open to "
+        "SHALLOW. Verdicts were recorded once per probe (`scripts/replay_tier2.py`) and replayed. "
+        f"Test split, lambda = {lam:g}.",
+        "",
+        _fmt(
+            pd.DataFrame(rows),
+            pct=["retrieval_rate", "false_skip_rate", "share_tier2", "share_failopen"],
+            dec={"cost": 3},
+        ),
+        "",
+        f"Full cascade minus the same band failing open (cost per query, learner CI): {d_ci}. "
+        f"Tier 2 decided {len(band)} test probes; of those, Tier 2 retrieved on "
+        f"{(band.route != 'SKIP').mean():.0%} and the label says memory was required on "
+        f"{band.label_required.mean():.0%}. Verdict latency (val + test, n = {len(v)}): "
+        f"p50 {v.ms.median():.0f} ms, p95 {v.ms.quantile(0.95):.0f} ms; "
+        f"{(ok.ms > s_full.gate.tier2_timeout_ms).mean():.1%} would exceed the timeout; "
+        f"routes {ok.route.value_counts(normalize=True).round(3).to_dict()}.",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def section_decisions() -> tuple[str, pd.DataFrame | None]:
@@ -397,7 +489,15 @@ def _plot_reliability(rel: pd.DataFrame) -> None:
 
 
 # ----------------------------------------------------------------------------- live runs
-def _traces() -> pd.DataFrame | None:
+def _traces(prefix: str = "edu-") -> pd.DataFrame | None:
+    """Experiment traces of one dataset (by learner-id prefix: 'edu-' or 'lme-')."""
+    tr = _all_traces()
+    if tr is None:
+        return None
+    return tr[tr.tenant_id.str.startswith(prefix)].reset_index(drop=True)
+
+
+def _all_traces() -> pd.DataFrame | None:
     db = Path("data/experiments.db")
     if not db.exists():
         return None
@@ -426,7 +526,11 @@ def section_efficiency() -> tuple[str, pd.DataFrame | None]:
     if tr is None or tr.empty:
         return "## 5. Efficiency (live runs)\n\n_no experiment traces yet_\n", None
     tr["lat_gate"] = tr.lat_signals + tr.lat_cache + tr.lat_tier0 + tr.lat_tier1 + tr.lat_tier2
-    tr["retrieved"] = tr.route.isin(["SHALLOW", "DEEP"])
+    tr["escalated"] = tr.escalated.fillna(False).astype(bool)
+    for c in ("lat_escalation", "lat_verify"):  # columns added after the first runs
+        tr[c] = tr[c].fillna(0.0) if c in tr else 0.0
+    # an escalated SKIP did retrieve (on the retry); `route` keeps the gate's decision
+    tr["retrieved"] = tr.route.isin(["SHALLOW", "DEEP"]) | tr.escalated
     # Cache hits (prompt+seed already generated by another arm) return in ~0 ms wall time but
     # carry their first-run prefill/decode. Rebuild the total with the model time the call took
     # when it was actually generated; cache misses are unchanged (generation >= prefill+decode).
@@ -495,7 +599,13 @@ def _breakeven_one(tr: pd.DataFrame, arm: str, rate: float | None) -> tuple[str,
     c_t0 = a.lat_tier0.mean()
     p_t1 = (a.lat_tier1 > 0).mean()
     c_t1 = a.loc[a.lat_tier1 > 0, "lat_tier1"].mean() if p_t1 > 0 else 0.0
-    lhs = c_feat + c_t0 + p_t1 * (c_t1 or 0.0)
+    # per-query means of terms paid only on some queries = P(term) x C(term)
+    t2 = a.lat_tier2.mean()  # P(T2) x C_T2
+    cache = a.lat_cache.mean()
+    ver = a.lat_verify.mean()  # P(SKIP verified) x C_ver
+    p_esc = a.escalated.mean()
+    esc = a.lat_escalation.mean()  # P(esc) x (C_ret + C_gen)
+    lhs = c_feat + c_t0 + p_t1 * (c_t1 or 0.0) + t2 + cache + ver + esc
     # Savings per query vs always: vector-store time not spent, plus prefill of memory tokens not
     # injected (counts both skips and SHALLOW-instead-of-DEEP).
     store_saved = b.lat_retrieval.mean() - a.lat_retrieval.mean()
@@ -507,12 +617,16 @@ def _breakeven_one(tr: pd.DataFrame, arm: str, rate: float | None) -> tuple[str,
         {"term": "C_T0", "value": c_t0},
         {"term": "P(T1)", "value": p_t1},
         {"term": "C_T1 (when fired)", "value": c_t1},
-        {"term": "P(T2), P(esc)", "value": 0.0},
-        {"term": "r (retrieval rate)", "value": r},
+        {"term": "P(T2) x C_T2 (Tier-2 ms per query)", "value": t2},
+        {"term": "decision-cache ms per query", "value": cache},
+        {"term": "verify ms per query (P(SKIP) x C_ver)", "value": ver},
+        {"term": "P(esc)", "value": p_esc},
+        {"term": "P(esc) x (C_ret + C_gen) (escalation ms per query)", "value": esc},
+        {"term": "r (retrieval rate, escalations included)", "value": r},
         {"term": "memory tokens saved / query (vs always)", "value": tok_saved},
         {"term": "store ms saved / query", "value": store_saved},
         {"term": "prefill ms saved / query (measured, prompt-cached)", "value": prefill_saved_meas},
-        {"term": "LHS: gate overhead per query (ms)", "value": lhs},
+        {"term": "LHS: gate + verify + escalation overhead per query (ms)", "value": lhs},
         {"term": "RHS measured: store + prefill saved (ms)", "value": rhs_meas},
     ]
     verdicts = [
@@ -537,16 +651,18 @@ def _breakeven_one(tr: pd.DataFrame, arm: str, rate: float | None) -> tuple[str,
 def section_breakeven(tr: pd.DataFrame | None) -> str:
     if tr is None or "always" not in set(tr.arm):
         return ""
-    gated = sorted(a for a in set(tr.arm) if a.startswith("amic"))
+    gated = sorted(a for a in set(tr.arm) if a.startswith("amic") or a.endswith("_esc"))
     if not gated:
         return ""
     rate = _uncached_prefill_ms_per_token()
     lines = [
         "## 6. Break-even inequality (measured)",
         "",
-        "C_emb cancels (both arms embed the query once; plan R1). Tier 2 and escalation are out of "
-        "scope, so P(T2) = P(esc) = 0. Savings are per query against `always` on the same probes "
-        "and seeds. See the prefill caveat in section 5.",
+        "C_emb cancels (both arms embed the query once; plan R1). Every overhead term is measured "
+        "from the traces: terms paid on only some queries (Tier 2, verification, escalation) are "
+        "averaged over all queries, i.e. P(term) x C(term). An escalation's retry (retrieval + "
+        "regeneration) counts in full on the overhead side. Savings are per query against "
+        "`always` on the same probes and seeds. See the prefill caveat in section 5.",
     ]
     for arm in gated:
         summary, rows = _breakeven_one(tr, arm, rate)
@@ -670,6 +786,114 @@ def section_quality() -> str:
     return "\n".join(lines) + "\n"
 
 
+ESC_RUNS = [("amic_esc", "amic"), ("amic_lam1_esc", "amic_lam1"), ("never_esc", "never")]
+
+
+def section_escalation(tr: pd.DataFrame | None) -> str:
+    """Verify-and-escalate (P6 / M7): live runs (E1-E3) and the verifier-mode replay (E4)."""
+    from amic.eval.escalation import MODES, replay_escalation
+    from amic.eval.judgecache import self_consistency
+
+    lab = pd.read_parquet("data/edu/labels.parquet").set_index("probe_id").label_required
+    live = []
+    for run, base in ESC_RUNS:
+        p = Path("runs") / run / "answers.jsonl"
+        if not p.exists():
+            continue
+        a = pd.read_json(p, lines=True)
+        esc = a.escalated.astype(bool)
+        skip = a.route == "SKIP"
+        need = a.probe_id.map(lab).astype(bool)
+        row: dict[str, Any] = {
+            "run": run,
+            "n": len(a),
+            "skip_rate": skip.mean(),
+            "escalation_rate": esc.mean(),
+            "escalated_of_skips": esc[skip].mean() if skip.any() else float("nan"),
+            # of escalated answers, how many the oracle label says needed memory
+            "esc_precision_vs_label": need[esc].mean() if esc.any() else float("nan"),
+            # of SKIPs the label says needed memory, how many were rescued
+            "esc_recall_vs_label": esc[skip & need].mean() if (skip & need).any() else float("nan"),
+        }
+        if tr is not None and run in set(tr.arm):
+            g = tr[tr.arm == run]
+            row["memory_tokens"] = g.memory_tokens.mean()
+            row["verify_ms_p50 (SKIPs)"] = g[g.route == "SKIP"].lat_verify.median()
+            row["retry_ms_p50"] = g[g.escalated].lat_escalation.median() if g.escalated.any() else 0
+        pw, pb = _pairwise(run), _pairwise(base)
+        if pw is not None:
+            row["net_vs_always (95% CI, learner)"] = fmt_ci(*net_win_ci(pw, "learner"))
+        if pw is not None and pb is not None:
+            d, lo, hi, _ = paired_diff_ci(pw, pb, "learner")
+            row["diff vs base (learner CI)"] = f"vs {base}: " + fmt_ci(d, lo, hi)
+        live.append(row)
+
+    replay_rows = []
+    for base in ("amic", "amic_lam1", "never"):
+        pb = _pairwise(base)
+        for mode in MODES:
+            m = replay_escalation(base, mode)
+            if m is None or pb is None:
+                continue
+            d, lo, hi, _ = paired_diff_ci(m, pb, "learner")
+            _, plo, phi, _ = paired_diff_ci(m, pb, "probe")
+            replay_rows.append(
+                {
+                    "base run": base,
+                    "verifier": mode,
+                    "escalation_rate": m.escalated.mean(),
+                    "net_vs_always": fmt_ci(*net_win_ci(m, "learner")),
+                    "gain vs base (probe CI)": fmt_ci(d, plo, phi),
+                    "gain vs base (learner CI)": fmt_ci(d, lo, hi),
+                }
+            )
+    if not live and not replay_rows:
+        return ""
+    n_sc, agree = self_consistency(["amic", "amic_lam1", "amic_no_s3", "oracle", "always_shallow"])
+    lines = [
+        "## 9. Verify-and-escalate (extension; pre-registered E1-E4)",
+        "",
+        "Answers generated without memory (SKIP) are checked by the ResponseVerifier (lexical "
+        "patterns for invented history or deferral, then the LLM verifier); a failed check retries "
+        "ONCE with SHALLOW memory. Escalated answers are byte-identical to the always-SHALLOW answer "
+        "for the same probe and seed (same prompt and seed; generation cache), and identical answer "
+        "pairs reuse the earlier pairwise verdict (docs/PLAN.md section 9), so differences against "
+        "the base run come only from the escalated rows. " + CI_NOTE,
+    ]
+    if live:
+        lines += [
+            "",
+            "### Live runs",
+            "",
+            _fmt(
+                pd.DataFrame(live),
+                pct=[
+                    "skip_rate",
+                    "escalation_rate",
+                    "escalated_of_skips",
+                    "esc_precision_vs_label",
+                    "esc_recall_vs_label",
+                ],
+                dec={"memory_tokens": 0, "verify_ms_p50 (SKIPs)": 1, "retry_ms_p50": 1},
+            ),
+        ]
+    if replay_rows:
+        lines += [
+            "",
+            "### Verifier mode (offline replay of the same answers, E4)",
+            "",
+            _fmt(pd.DataFrame(replay_rows), pct=["escalation_rate"]),
+        ]
+    if n_sc:
+        lines += [
+            "",
+            f"Judge self-consistency: {n_sc} identical answer pairs were judged twice by "
+            f"different runs (independent A/B order); the two verdicts agree on {agree:.1%}. "
+            "This is the noise floor of a single pairwise judgment.",
+        ]
+    return "\n".join(lines) + "\n"
+
+
 def section_summary(tr: pd.DataFrame | None) -> str:
     """Token use vs quality for every live run, side by side (the efficiency/quality frontier)."""
     if tr is None or "always" not in set(tr.arm):
@@ -733,6 +957,8 @@ def main() -> None:
     parts.append(section_breakeven(tr))
     parts.append(section_quality())
     parts.append(section_summary(tr))
+    parts.append(section_escalation(tr))
+    parts.append(section_tier2())
     md = "\n".join(p for p in parts if p)
     (OUT / "main.md").write_text(md, encoding="utf-8")
     print(md)

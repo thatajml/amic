@@ -1,14 +1,18 @@
 """M4 memory sketch (gate-only; never injected into a prompt).
 
-Per learner: k cluster centroids over their M1 embeddings + a Bloom filter over salient terms.
+Per learner: k cluster centroids over their M1 embeddings + a Bloom filter over salient terms,
+plus the most frequent terms (a topic summary Tier 2 may read; still no documents).
 `affinity(q_vec)` is a handful of dot products: no ANN search, no documents read (P3, S3).
-Rebuilt by the write path (MemoryWriter.on_written hook) and cached in-process.
+Cached in-process per learner and rebuilt when the learner's memory version changes, so writes
+by any process (inline writer or the consolidation worker) and erasure are picked up.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -117,6 +121,7 @@ class MemorySketch:
     n_records: int
     vocab_size: int = 0
     _term_df: dict[str, int] = field(default_factory=dict, repr=False)
+    top_terms: list[str] = field(default_factory=list)  # most frequent terms, for Tier 2
 
     def affinity(self, q_vec: np.ndarray) -> tuple[float, float]:
         """(max_sim, margin): best centroid cosine and its gap to the runner-up."""
@@ -157,40 +162,66 @@ def _kmeans(x: np.ndarray, k: int, iters: int = 15, seed: int = 0) -> tuple[np.n
     return cent.astype(np.float32), weights
 
 
-def build_sketch(vectors: np.ndarray, texts: list[str], max_k: int = 8) -> MemorySketch:
+def build_sketch(
+    vectors: np.ndarray, texts: list[str], max_k: int = 8, n_top_terms: int = 15
+) -> MemorySketch:
     n = vectors.shape[0]
     bloom = BloomFilter()
-    vocab: set[str] = set()
+    df: Counter[str] = Counter()
     for t in texts:
-        for w in terms(t):
+        ts = terms(t)
+        df.update(ts)
+        for w in ts:
             bloom.add(w)
-            vocab.add(w)
+    # document frequency, ties broken alphabetically so the summary is deterministic
+    top = [w for w, _ in sorted(df.items(), key=lambda kv: (-kv[1], kv[0]))[:n_top_terms]]
     if n == 0:
-        return MemorySketch(np.zeros((0, 0), np.float32), np.zeros(0), bloom, 0, len(vocab))
+        return MemorySketch(
+            np.zeros((0, 0), np.float32), np.zeros(0), bloom, 0, len(df), top_terms=top
+        )
     k = max(1, min(max_k, n // 5 or 1))
     cent, w = _kmeans(vectors.astype(np.float32), k)
-    return MemorySketch(cent, w, bloom, n, len(vocab))
+    return MemorySketch(cent, w, bloom, n, len(df), top_terms=top)
 
 
 class EpisodicSketchStore:
-    """SketchStore over the episodic store. `get` returns None when a learner has no memory (R1)."""
+    """SketchStore over the episodic store. `get` returns None when a learner has no memory (R1).
 
-    def __init__(self, episodic: EpisodicStore, max_k: int = 8) -> None:
+    `version_fn(user_id)` (the session backend's memory version) makes the cache self-healing:
+    a cached sketch is used only while the learner's version is unchanged.
+    """
+
+    def __init__(
+        self,
+        episodic: EpisodicStore,
+        max_k: int = 8,
+        version_fn: Callable[[str], int] | None = None,
+    ) -> None:
         self._episodic = episodic
         self._max_k = max_k
-        self._cache: dict[str, MemorySketch | None] = {}
+        self._version_fn = version_fn
+        self._cache: dict[str, tuple[int, MemorySketch | None]] = {}
         self.builds = 0
 
+    def _version(self, user_id: str) -> int:
+        return self._version_fn(user_id) if self._version_fn is not None else 0
+
     def get(self, user_id: str) -> MemorySketch | None:
-        if user_id not in self._cache:
-            self.rebuild(user_id)
-        return self._cache[user_id]
+        v = self._version(user_id)
+        hit = self._cache.get(user_id)
+        if hit is None or hit[0] != v:
+            self._build(user_id, v)
+        return self._cache[user_id][1]
 
     def rebuild(self, user_id: str) -> None:
+        self._build(user_id, self._version(user_id))
+
+    def _build(self, user_id: str, version: int) -> None:
         ids, vecs, texts = self._episodic.vectors_and_texts(user_id)
         self.builds += 1
-        self._cache[user_id] = build_sketch(vecs, texts, self._max_k) if ids else None
+        sketch = build_sketch(vecs, texts, self._max_k) if ids else None
+        self._cache[user_id] = (version, sketch)
 
     def invalidate(self, user_id: str) -> None:
-        """Called by the write path; next `get` rebuilds lazily."""
+        """Drop the cached sketch; the next `get` rebuilds (same-process writes)."""
         self._cache.pop(user_id, None)

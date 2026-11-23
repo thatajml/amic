@@ -1,9 +1,14 @@
 """AgentOrchestrator (L3): one LangGraph state machine shared by every arm.
 
-    decide ──(SKIP/WRITE)──────────────► generate ─► record ─► END
-       └────(SHALLOW/DEEP)─► retrieve ─┘
+    decide ──(SKIP/WRITE)──────────────► generate ─► verify ─► record ─► END
+       └────(SHALLOW/DEEP)─► retrieve ─┘    ▲           │
+                                ▲           │           └─(failed, once)─► escalate ─┐
+                                └───────────┴────────────────────────────────────────┘
 
 Arms differ ONLY in `decide`, so every comparison isolates the gating decision.
+`verify` is a no-op unless `ablation.use_escalation` is on and the answer was generated without
+memory (route SKIP) for a learner who has memory; a failed check retries ONCE with the
+`verify.escalation_route` memory (P6: a wrong skip must be recoverable, bounded to one retry).
 The long-term write is returned as a deferred job and is never timed on the response path (P5).
 """
 
@@ -25,6 +30,7 @@ from amic.contracts.models import (
     MemoryDecision,
     MemoryItem,
     RequestContext,
+    ResolvedBy,
     Route,
     Turn,
 )
@@ -48,6 +54,11 @@ class RunState(TypedDict, total=False):
     answer: str
     lat: dict[str, float]
     t_start: float
+    # verify-and-escalate
+    verify_failed: bool
+    verify_reason: str
+    escalated: bool
+    first_llm: LLMResult  # the discarded memory-less generation of an escalated request
 
 
 def _ms(t: float) -> float:
@@ -65,13 +76,19 @@ class PipelineArm:
         g.add_node("decide", self._decide_node)
         g.add_node("retrieve", self._retrieve_node)
         g.add_node("generate", self._generate_node)
+        g.add_node("verify", self._verify_node)
+        g.add_node("escalate", self._escalate_node)
         g.add_node("record", self._record_node)
         g.add_edge(START, "decide")
         g.add_conditional_edges(
             "decide", self._after_decide, {"retrieve": "retrieve", "generate": "generate"}
         )
         g.add_edge("retrieve", "generate")
-        g.add_edge("generate", "record")
+        g.add_edge("generate", "verify")
+        g.add_conditional_edges(
+            "verify", self._after_verify, {"escalate": "escalate", "record": "record"}
+        )
+        g.add_edge("escalate", "retrieve")
         g.add_edge("record", END)
         self._graph = g.compile()
 
@@ -90,6 +107,21 @@ class PipelineArm:
         lat = {**state.get("lat", {}), "embed": _ms(t)}
         return {"q_vec": v, "lat": lat}
 
+    def _should_verify(self, state: RunState) -> bool:
+        if not self.c.settings.ablation.use_escalation or state.get("escalated"):
+            return False
+        if self.c.verifier is None:
+            return False
+        d = state["decision"]
+        if d.route != Route.SKIP:
+            return False
+        if d.resolved_by == ResolvedBy.TIER0 and d.rationale.startswith("R1"):
+            return False  # no long-term memory exists: escalating cannot help
+        feats = state.get("features") or {}
+        if "s3_has_memory" in feats:  # amic arm: known from the sketch, set even if S3 is ablated
+            return feats["s3_has_memory"] > 0
+        return self.c.sketches.get(state["ctx"].tenant_id) is not None
+
     # ----------------------------------------------------------------- nodes
     def _decide_node(self, state: RunState) -> dict[str, Any]:
         return self.decide(state)
@@ -106,29 +138,64 @@ class PipelineArm:
         t = time.perf_counter()
         items = self.c.retrieval.retrieve(d.plan, q_vec, state["ctx"].tenant_id)
         block, used, mem_tok = self.c.assembler.assemble(items, d.token_budget)
+        key = "esc_retrieval" if state.get("escalated") else "retrieval"
         return {
             "q_vec": q_vec,
             "items": used,
             "memory_block": block,
             "memory_tokens": mem_tok,
-            "lat": {**lat, "retrieval": _ms(t)},
+            "lat": {**lat, key: _ms(t)},
         }
 
     def _generate_node(self, state: RunState) -> dict[str, Any]:
         ctx = state["ctx"]
-        msgs = self.c.prompts.build(ctx.query, ctx.m0_turns, state.get("memory_block", ""))
+        msgs = self.c.prompts.build(
+            ctx.query, ctx.m0_turns, state.get("memory_block", ""), now=ctx.now
+        )
         t = time.perf_counter()
         res = self.c.llm.chat(msgs, seed=self.c.settings.models.seed)
-        return {
-            "llm": res,
-            "answer": res.text.strip(),
-            "lat": {
-                **state.get("lat", {}),
-                "generation": _ms(t),
-                "prefill": res.prefill_ms,
-                "decode": res.decode_ms,
-            },
-        }
+        lat = dict(state.get("lat", {}))
+        if state.get("escalated"):  # the retry: first-pass timings stay as they were
+            wall = _ms(t)
+            # A gateway that serves cached results (experiments only) reports the first-run
+            # model time in total_ms; count that, and add the difference to the request total,
+            # so a cached retry is not timed at ~0 ms. Without a cache this is a no-op.
+            model = max(wall, res.total_ms)
+            lat["esc_generation"] = model
+            lat["esc_cache_correction"] = model - wall
+            return {"llm": res, "first_llm": state["llm"], "answer": res.text.strip(), "lat": lat}
+        lat.update(generation=_ms(t), prefill=res.prefill_ms, decode=res.decode_ms)
+        return {"llm": res, "answer": res.text.strip(), "lat": lat}
+
+    def _verify_node(self, state: RunState) -> dict[str, Any]:
+        if not self._should_verify(state):
+            return {}
+        ctx = state["ctx"]
+        res = self.c.verifier.check(ctx.query, state["answer"], ctx.m0_turns)  # type: ignore[union-attr]
+        lat = dict(state.get("lat", {}))
+        lat["verify"] = lat.get("verify", 0.0) + res.ms
+        return {"lat": lat, "verify_failed": res.needs_memory, "verify_reason": res.reason}
+
+    @staticmethod
+    def _after_verify(state: RunState) -> str:
+        failed = state.get("verify_failed", False) and not state.get("escalated", False)
+        return "escalate" if failed else "record"
+
+    def _escalate_node(self, state: RunState) -> dict[str, Any]:
+        d0 = state["decision"]
+        route = Route(self.c.settings.verify.escalation_route)
+        plan = self.c.planner.plan(route)
+        d = d0.model_copy(
+            update={
+                "route": route,
+                "plan": plan,
+                "token_budget": plan.token_budget,
+                "escalated_from": d0.route,
+                "rationale": f"{d0.rationale}; verify failed ({state.get('verify_reason', '')})"
+                f" -> retried with {route.value} memory",
+            }
+        )
+        return {"decision": d, "escalated": True}
 
     def _record_node(self, state: RunState) -> dict[str, Any]:
         ctx = state["ctx"]
@@ -139,9 +206,14 @@ class PipelineArm:
             Turn(role="user", text=ctx.query, ts=now),
             Turn(role="assistant", text=state["answer"], ts=now),
         )
-        lat = {**state.get("lat", {}), "total": _ms(state["t_start"])}
+        lat = dict(state.get("lat", {}))
+        lat["total"] = _ms(state["t_start"]) + lat.pop("esc_cache_correction", 0.0)
+        escalated = bool(state.get("escalated"))
+        esc_ms = lat.pop("esc_retrieval", 0.0) + lat.pop("esc_generation", 0.0)
+        if escalated:
+            lat["escalation"] = esc_ms
         d = state["decision"]
-        res = state["llm"]
+        res, first = state["llm"], state.get("first_llm")
         trace = DecisionTrace(
             request_id=ctx.request_id,
             ts=now,
@@ -150,16 +222,18 @@ class PipelineArm:
             arm=self.name,
             config_hash=self.c.config_hash,
             query=ctx.query,
-            route=d.route,
+            route=d.escalated_from or d.route,  # the gate's decision; `escalated` marks a retry
             resolved_by=d.resolved_by,
             p=d.p,
             tau_low=d.tau_low,
             tau_high=d.tau_high,
             latency=LatencySplit(**lat),
-            prompt_tokens=res.prompt_tokens,
-            completion_tokens=res.completion_tokens,
+            # tokens actually processed: both generations of an escalated request
+            prompt_tokens=res.prompt_tokens + (first.prompt_tokens if first else 0),
+            completion_tokens=res.completion_tokens + (first.completion_tokens if first else 0),
             memory_tokens=state.get("memory_tokens", 0),
             n_items=len(state.get("items", [])),
+            escalated=escalated,
             features=state.get("features", {}),
             oracle_label=ctx.oracle_label,
         )
@@ -172,7 +246,7 @@ class PipelineArm:
         out = self._graph.invoke(state)
         resp = AgentResponse(
             answer=out["answer"],
-            decision=out["decision"],
+            decision=out["decision"],  # final route; `escalated_from` holds the gate's route
             items=out.get("items", []),
             trace_id=ctx.request_id,
         )

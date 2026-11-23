@@ -86,6 +86,31 @@ class EpisodicStore:
             ids=[record_id], embeddings=[vec.tolist()], documents=[text], metadatas=[meta]
         )
 
+    def add_many(
+        self,
+        tenant_id: str,
+        record_ids: list[str],
+        texts: list[str],
+        vecs: np.ndarray,
+        tss: list[datetime],
+        metadatas: list[Metadata] | None = None,
+        batch: int = 4000,
+    ) -> None:
+        """Bulk upsert for seeding (one Chroma call per `batch` records)."""
+        metas = [
+            {**(m or {}), "tenant_id": tenant_id, "ts": ts.timestamp()}
+            for m, ts in zip(metadatas or [None] * len(tss), tss, strict=True)
+        ]
+        col = self._col(tenant_id)
+        for i in range(0, len(record_ids), batch):
+            j = i + batch
+            col.upsert(
+                ids=record_ids[i:j],
+                embeddings=vecs[i:j].tolist(),
+                documents=texts[i:j],
+                metadatas=metas[i:j],
+            )
+
     def query(
         self, tenant_id: str, q_vec: np.ndarray, k: int, filters: Metadata | None = None
     ) -> list[Hit]:

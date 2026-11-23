@@ -1,0 +1,8 @@
+# Verify-and-escalate (brief P6 / M7; pre-registered E1, E3). Answers generated without memory
+# (route SKIP) are checked: lexical patterns, then the LLM verifier. A failed check retries ONCE
+# with SHALLOW memory. Run as amic_esc (--arms amic) and never_esc (--arms never).
+ablation:
+  use_escalation: true
+verify:
+  mode: both
+  escalation_route: SHALLOW

@@ -16,12 +16,23 @@ class OllamaGateway:
         seed: int = 0,
         max_tokens: int = 256,
         keep_alive: str = "30m",
+        num_ctx: int | None = None,
+        timeout_s: float | None = None,
     ) -> None:
+        """`num_ctx` None keeps Ollama's default context; calls sharing one model must agree on
+        it or Ollama reloads the model. `timeout_s` bounds the HTTP call (Tier 2 fails open)."""
         import ollama
 
         self.model = model
-        self._client = ollama.Client(host=base_url)
-        self._defaults = {"temperature": temperature, "seed": seed, "num_predict": max_tokens}
+        kw = {"timeout": timeout_s} if timeout_s is not None else {}
+        self._client = ollama.Client(host=base_url, **kw)
+        self._defaults: dict[str, float | int] = {
+            "temperature": temperature,
+            "seed": seed,
+            "num_predict": max_tokens,
+        }
+        if num_ctx is not None:
+            self._defaults["num_ctx"] = num_ctx
         self._keep_alive = keep_alive
 
     def chat(

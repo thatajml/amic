@@ -109,6 +109,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 "scripts/*" = ["E501"]   # markdown table rendering
 "src/amic/eval/datasets/edu.py" = ["E501"]   # prompt text kept verbatim (it generated the dataset)
 "src/amic/control/signals/bus.py" = ["E501"]   # regex lexicons
+"src/amic/generation/verifier.py" = ["E501"]   # regex lexicons
 "src/amic/memory/sketch.py" = ["E501"]
 "tests/*" = ["E501"]
 "src/amic/eval/report.py" = ["E501"]   # prose inside tables

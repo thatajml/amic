@@ -1,0 +1,8 @@
+# lambda = 1 (tau* = 0.5, many more SKIPs) with verify-and-escalate (pre-registered E2).
+gate:
+  lam: 1.0
+ablation:
+  use_escalation: true
+verify:
+  mode: both
+  escalation_route: SHALLOW

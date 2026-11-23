@@ -2,16 +2,27 @@
 
 M0 is written synchronously on the response path (one Redis RPUSH), so turn N is visible
 to turn N+1 immediately. Long-term stores have no read-your-writes guarantee (brief section 7).
+
+Memory version: a per-learner number that changes on every long-term write and on erasure.
+The M4 sketch cache and the decision cache key on it, so a write made by another process (the
+consolidation worker) invalidates them without any message passing. Erasure sets a NEW value
+rather than deleting it, so an entry cached before the erasure can never match again.
 """
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Any
 
 from amic.contracts.models import Turn
 
 _KEEP = 50  # turns retained per session in Redis; prompts use the last `m0_turns`
+
+
+def _next_version(prev: int) -> int:
+    """Strictly increasing, and wall-clock based so it survives process restarts."""
+    return max(prev + 1, time.time_ns())
 
 
 class SessionManager:
@@ -72,6 +83,20 @@ class SessionManager:
             s = s.decode() if isinstance(s, bytes) else s
             self._r.delete(self._turns_key(s))
         self._r.delete(key, f"{key}:sessions")
+        self.bump_mem_version(tenant_id)  # a new value, never a reset (see module docstring)
+
+    # ----------------------------------------------------------------- memory version
+    def _ver_key(self, tenant_id: str) -> str:
+        return f"{self._p}:tenant:{tenant_id}:memver"
+
+    def mem_version(self, tenant_id: str) -> int:
+        v = self._r.get(self._ver_key(tenant_id))
+        return int(v) if v is not None else 0
+
+    def bump_mem_version(self, tenant_id: str) -> int:
+        v = _next_version(self.mem_version(tenant_id))
+        self._r.set(self._ver_key(tenant_id), v)
+        return v
 
 
 class SqliteSessionManager:
@@ -98,7 +123,9 @@ class SqliteSessionManager:
                    tenant_id TEXT PRIMARY KEY, last_session_id TEXT, last_seen REAL,
                    prev_session_end REAL, n_sessions REAL);
                CREATE TABLE IF NOT EXISTS tenant_sessions (
-                   tenant_id TEXT, session_id TEXT, PRIMARY KEY (tenant_id, session_id));"""
+                   tenant_id TEXT, session_id TEXT, PRIMARY KEY (tenant_id, session_id));
+               CREATE TABLE IF NOT EXISTS mem_version (
+                   tenant_id TEXT PRIMARY KEY, v INTEGER NOT NULL);"""
         )
         self._lock = threading.Lock()
         self._n = m0_turns
@@ -176,3 +203,20 @@ class SqliteSessionManager:
             self._db.executemany("DELETE FROM turns WHERE session_id=?", [(s,) for s in sess])
             self._db.execute("DELETE FROM tenant_sessions WHERE tenant_id=?", (tenant_id,))
             self._db.execute("DELETE FROM tenant WHERE tenant_id=?", (tenant_id,))
+        self.bump_mem_version(tenant_id)  # a new value, never a reset (see module docstring)
+
+    def mem_version(self, tenant_id: str) -> int:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT v FROM mem_version WHERE tenant_id=?", (tenant_id,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def bump_mem_version(self, tenant_id: str) -> int:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT v FROM mem_version WHERE tenant_id=?", (tenant_id,)
+            ).fetchone()
+            v = _next_version(int(row[0]) if row else 0)
+            self._db.execute("INSERT OR REPLACE INTO mem_version VALUES (?, ?)", (tenant_id, v))
+        return v

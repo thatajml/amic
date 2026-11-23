@@ -30,9 +30,9 @@ class STEmbedder:
         v = self._model.encode(text, normalize_embeddings=True, convert_to_numpy=True)
         return np.asarray(v, dtype=np.float32)
 
-    def encode_many(self, texts: list[str]) -> np.ndarray:
+    def encode_many(self, texts: list[str], batch_size: int = 64) -> np.ndarray:
         v = self._model.encode(
-            texts, normalize_embeddings=True, convert_to_numpy=True, batch_size=64
+            texts, normalize_embeddings=True, convert_to_numpy=True, batch_size=batch_size
         )
         return np.asarray(v, dtype=np.float32)
 

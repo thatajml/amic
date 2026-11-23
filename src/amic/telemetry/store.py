@@ -20,7 +20,9 @@ from sqlalchemy import (
     Text,
     create_engine,
     insert,
+    inspect,
     select,
+    text,
 )
 
 from amic.contracts.models import DecisionTrace, LatencySplit
@@ -83,6 +85,20 @@ class SqliteTelemetry:
             Path(url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(url)
         _meta.create_all(self.engine)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """ALTER in every column the table defines but an older database lacks.
+
+        Derived from `traces` itself, so new DecisionTrace / LatencySplit fields are covered
+        without keeping a hand-written list in sync.
+        """
+        have = {c["name"] for c in inspect(self.engine).get_columns("traces")}
+        missing = [c for c in traces.columns if c.name not in have]
+        with self.engine.begin() as conn:
+            for col in missing:
+                sql_type = col.type.compile(dialect=self.engine.dialect)
+                conn.execute(text(f'ALTER TABLE traces ADD COLUMN "{col.name}" {sql_type}'))
 
     def record(self, trace: DecisionTrace) -> None:
         with self.engine.begin() as conn:

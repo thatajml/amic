@@ -67,13 +67,24 @@ def main() -> None:
     ap.add_argument("--baseline", default="always")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--wait-for-quota", action="store_true", help="sleep through daily-cap resets")
+    ap.add_argument(
+        "--reuse-from",
+        nargs="*",
+        default=[],
+        help="earlier runs whose verdicts are reused for byte-identical answer pairs, searched "
+        "in this order (put the run's parent first; see amic/eval/judgecache.py)",
+    )
     a = ap.parse_args()
+    from amic.eval.judgecache import PairwiseCache
     from amic.eval.quota import run_with_quota
 
     llm = judge_from_settings(Settings().models)
     learners = {lr.learner_id: lr for lr in edu.load_learners()}
     probes = {p.probe_id: p for p in edu.load_probes()}
     base = load_answers(a.baseline)
+    cache = PairwiseCache.load(a.reuse_from, a.baseline)
+    if a.reuse_from:
+        print(f"reusable verdicts: {len(cache)} from {a.reuse_from}", flush=True)
 
     jobs: list[tuple[str, tuple[str, int]]] = []
     judges: dict[str, Callable[[tuple[str, int]], dict]] = {}
@@ -101,6 +112,9 @@ def main() -> None:
                 "route": mine[k]["route"],
                 "base_route": base[k]["route"],
             }
+            if "final_route" in mine[k]:  # runs with verify-and-escalate
+                row["final_route"] = mine[k]["final_route"]
+                row["escalated"] = bool(mine[k].get("escalated"))
             if x.strip() == b.strip():
                 return {
                     **row,
@@ -109,6 +123,10 @@ def main() -> None:
                     "fab_run": None,
                     "fab_base": None,
                 }
+            hit = cache.get(pid, seed, x, b)
+            if hit is not None:
+                source, verdict = hit
+                return {**row, **verdict, "identical": False, "reused": source}
             p = probes[pid]
             lr = learners[p.learner_id]
             run_is_a = random.Random(f"{run}|{pid}|{seed}").random() < 0.5
