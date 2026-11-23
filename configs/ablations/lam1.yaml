@@ -1,0 +1,4 @@
+# Operating point lambda = 1 (tau* = 0.5): a false skip costs the same as a false retrieve.
+# Shows the token-savings vs quality trade-off against the default lambda = 4.
+gate:
+  lam: 1.0
