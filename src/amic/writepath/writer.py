@@ -1,8 +1,9 @@
 """Long-term memory writer (L7). Runs AFTER the response is produced (P5).
 
-This sprint: embed the turn and upsert it into M1. The full pipeline (salience filter, fact
-extraction, conflict resolution, M3 EWMA, sketch rebuild, cache invalidation) is future work;
-`on_written` hooks let the sketch builder (Day 4) subscribe without changing callers.
+Embeds a turn (or an explicit /remember note) and upserts it into M1. The rest of the
+consolidation pipeline (salience, fact extraction, conflict resolution, M3 EWMA) is in
+writepath/worker.py; `on_written` hooks bump the learner's memory version, which rebuilds the M4
+sketch and invalidates cached decisions in every process.
 """
 
 from __future__ import annotations
@@ -37,14 +38,28 @@ class MemoryWriter:
         ts: datetime,
         metadata: dict[str, str | int | float | bool] | None = None,
     ) -> None:
-        text = record_text(query, answer)
+        self.write_record(
+            tenant_id, session_id, record_id, record_text(query, answer), ts, metadata, "turn"
+        )
+
+    def write_record(
+        self,
+        tenant_id: str,
+        session_id: str,
+        record_id: str,
+        text: str,
+        ts: datetime,
+        metadata: dict[str, str | int | float | bool] | None = None,
+        kind: str = "turn",
+    ) -> None:
+        """Upsert one M1 record (a turn, or an explicit /remember note) and fire the hooks."""
         self._episodic.add(
             tenant_id,
             record_id,
             text,
             self._embedder.encode(text),
             ts,
-            {**(metadata or {}), "session_id": session_id, "kind": "turn"},
+            {**(metadata or {}), "session_id": session_id, "kind": kind},
         )
         for hook in self.on_written:
             hook(tenant_id)

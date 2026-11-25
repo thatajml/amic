@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from amic.app import build_components
+from amic.app import build_components, gate_llm_from_settings
 from amic.contracts.config import Settings, load_settings
 from amic.contracts.models import RequestContext, Route, Turn
 from amic.eval.datasets import edu
@@ -52,28 +52,48 @@ def _round_robin(probes: list[edu.Probe]) -> list[edu.Probe]:
     return out
 
 
+DATASETS = {
+    # name -> (data dir, Chroma collection)
+    "edu": (edu.DATA_DIR, "edu_v1"),
+    "longmemeval": (Path("data/longmemeval"), "lme_v1"),
+}
+
+
+def _probes(dataset: str, split: str) -> list[edu.Probe]:
+    if dataset == "edu":
+        all_probes = edu.load_probes()
+        splits = edu.split_of(list({p.learner_id for p in all_probes}))
+        return _round_robin([p for p in all_probes if splits[p.learner_id] == split])
+    d = DATASETS[dataset][0]
+    subset = set(json.loads((d / "subset.json").read_text(encoding="utf-8")))
+    # one probe per tenant: the live-QA subset (scripts/prepare_longmemeval.py)
+    return [
+        p for p in edu.load_probes(d / "probes.jsonl") if p.probe_id.removeprefix("lme-") in subset
+    ]
+
+
 def run(
     arm_name: str,
     run_name: str,
     seeds: list[int],
     split: str,
-    config: str | None,
+    config: list[str] | None,
     tier1_path: str | None,
     temperature: float,
     limit: int | None,
+    dataset: str = "edu",
 ) -> None:
     from amic.app import build_arm
     from amic.arms.amic import AmicArm
     from amic.control.tier1 import Tier1Model
 
+    data_dir, collection = DATASETS[dataset]
     # labels are needed only by the oracle arm; the split is by learner and label-independent
-    lab_path = edu.DATA_DIR / "labels.parquet"
+    lab_path = data_dir / "labels.parquet"
     labels = pd.read_parquet(lab_path).set_index("probe_id") if lab_path.exists() else None
     if arm_name == "oracle" and labels is None:
-        raise SystemExit("the oracle arm needs data/edu/labels.parquet (run label_oracle.py label)")
-    all_probes = edu.load_probes()
-    splits = edu.split_of(list({p.learner_id for p in all_probes}))
-    probes = _round_robin([p for p in all_probes if splits[p.learner_id] == split])[:limit]
+        raise SystemExit(f"the oracle arm needs {lab_path}")
+    probes = _probes(dataset, split)[:limit]
     out_dir = Path("runs") / run_name
     out_dir.mkdir(parents=True, exist_ok=True)
     answers = out_dir / "answers.jsonl"
@@ -87,9 +107,10 @@ def run(
     with answers.open("a", encoding="utf-8") as fout:
         for seed in seeds:
             overrides = {
-                "chroma_collection": "edu_v1",
+                "chroma_collection": collection,
                 "metrics_db_url": EXP_DB,
                 "models": {"temperature": temperature, "seed": seed},
+                "gate": {"distill_path": f"data/distill/{run_name}.jsonl"},  # Tier-2 verdicts
             }
             s: Settings = load_settings(config, **overrides)
             if tier1_path:
@@ -97,7 +118,12 @@ def run(
             m = s.models
             llm = CachingGateway(
                 OllamaGateway(
-                    m.tutor, m.ollama_base_url, m.temperature, m.seed, m.max_answer_tokens
+                    m.tutor,
+                    m.ollama_base_url,
+                    m.temperature,
+                    m.seed,
+                    m.max_answer_tokens,
+                    num_ctx=m.num_ctx,
                 )
             )
             c = build_components(s, llm=llm)
@@ -113,6 +139,10 @@ def run(
                 c.sketches.get(lid)  # so never inside the timed gate
             hashes[seed] = c.config_hash
             llm.chat([{"role": "user", "content": "hi"}], max_tokens=1, seed=seed)  # warm-up
+            if c.gate_llm is not None or s.ablation.tiers == "full":
+                # tutor calls may all be cache hits: load the gate model now, without Tier 2's
+                # 800 ms HTTP timeout (a cold load takes seconds)
+                gate_llm_from_settings(s).chat([{"role": "user", "content": "hi"}], max_tokens=1)
             todo = [p for p in probes if (p.probe_id, seed) not in done]
             print(f"[{run_name}] seed={seed}: {len(todo)} probes", flush=True)
             for i, p in enumerate(todo, 1):
@@ -135,14 +165,17 @@ def run(
                     ),
                 )
                 resp, _drop_write = arm.answer_deferred(ctx)
+                d = resp.decision
                 fout.write(
                     json.dumps(
                         {
                             "probe_id": p.probe_id,
                             "seed": seed,
                             "run": run_name,
-                            "route": resp.decision.route.value,
-                            "resolved_by": resp.decision.resolved_by.value,
+                            "route": (d.escalated_from or d.route).value,  # the gate's decision
+                            "final_route": d.route.value,  # differs only after an escalation
+                            "escalated": d.escalated_from is not None,
+                            "resolved_by": d.resolved_by.value,
                             "p": resp.decision.p,
                             "answer": resp.answer,
                             "trace_id": resp.trace_id,
@@ -179,14 +212,25 @@ def main() -> None:
     ap.add_argument("--arms", nargs="+", default=["always", "never", "oracle", "amic"])
     ap.add_argument("--name", default=None, help="run name (single arm only); default = arm")
     ap.add_argument("--seeds", nargs="+", type=int, default=[1, 2, 3])
-    ap.add_argument("--split", default="test")
-    ap.add_argument("--config", default=None)
+    ap.add_argument("--split", default="test", help="edu only")
+    ap.add_argument("--config", nargs="*", default=None, help="YAML file(s), merged in order")
     ap.add_argument("--tier1", default=None)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--dataset", choices=sorted(DATASETS), default="edu")
     a = ap.parse_args()
     for arm in a.arms:
-        run(arm, a.name or arm, a.seeds, a.split, a.config, a.tier1, a.temperature, a.limit)
+        run(
+            arm,
+            a.name or arm,
+            a.seeds,
+            a.split,
+            a.config,
+            a.tier1,
+            a.temperature,
+            a.limit,
+            a.dataset,
+        )
 
 
 if __name__ == "__main__":

@@ -10,14 +10,18 @@ from typing import Any
 from amic.contracts.config import Settings
 from amic.contracts.interfaces import TelemetryCollector
 from amic.contracts.models import ArmName, RequestContext
+from amic.control.cache import DecisionCache
 from amic.control.route_planner import RoutePlanner
 from amic.generation.gateway.base import LLMGateway
 from amic.generation.prompt import PromptBuilder
+from amic.generation.verifier import ResponseVerifier
 from amic.memory.assembler import ContextAssembler
 from amic.memory.embedder import Embedder
 from amic.memory.retrieval import ChromaRetrievalEngine
 from amic.memory.sketch import EpisodicSketchStore
 from amic.memory.stores.episodic import EpisodicStore, make_chroma_client
+from amic.memory.stores.profile import ProfileStore, RedisKV, SqliteKV
+from amic.memory.stores.semantic import SemanticStore
 from amic.orchestration.graph import PipelineArm, new_request_id
 from amic.service.session import SessionManager, SqliteSessionManager
 from amic.writepath.writer import MemoryWriter
@@ -39,6 +43,12 @@ class Components:
     sketches: EpisodicSketchStore
     config_hash: str = ""
     extras: dict[str, Any] = field(default_factory=dict)
+    verifier: ResponseVerifier | None = None  # set when ablation.use_escalation is on
+    gate_llm: LLMGateway | None = None  # Tier 2 / verifier model (models.tier2)
+    semantic: SemanticStore | None = None  # M2 facts
+    decision_cache: DecisionCache | None = None  # set when ablation.use_cache is on
+    write_queue: Any = None  # WriteIntentQueue: where answered turns go (see build_queue)
+    profiles: ProfileStore | None = None  # M3 learner profiles
     # Builds a gateway for another tutor model (per-request `model`). None = default model only.
     llm_factory: Callable[[str], LLMGateway] | None = None
 
@@ -63,12 +73,49 @@ class UnknownModelError(ValueError):
         self.model = model
 
 
+def build_queue(comps: Components, for_worker: bool = False) -> Any:
+    """The WriteIntentQueue from settings.writepath.queue. `inline` consolidates in-process right
+    after the response (the pre-queue behaviour); `sqlite` / `redis` only enqueue, and the
+    ConsolidationWorker process consumes."""
+    from amic.writepath.queue import InlineQueue, RedisStreamQueue, SqliteWriteQueue
+    from amic.writepath.worker import build_worker
+
+    w = comps.settings.writepath
+    if w.queue == "inline":
+        return InlineQueue(build_worker(comps).process)
+    if w.queue == "sqlite":
+        return SqliteWriteQueue(w.queue_db)
+    redis = comps.extras.get("redis")
+    if redis is None:
+        raise RuntimeError("writepath.queue=redis needs the Redis session backend")
+    consumer = "worker" if for_worker else "api"
+    return RedisStreamQueue(redis, w.stream, w.group, consumer)
+
+
+def gate_llm_from_settings(s: Settings, timeout_s: float | None = None) -> LLMGateway:
+    """The Tier-2 / verifier model: deterministic, short JSON answers, same context as the tutor
+    (Ollama would otherwise reload the shared model on every switch)."""
+    from amic.generation.gateway.ollama import OllamaGateway
+
+    m = s.models
+    return OllamaGateway(
+        m.tier2,
+        m.ollama_base_url,
+        temperature=0.0,
+        seed=0,
+        max_tokens=s.verify.llm_max_tokens,
+        num_ctx=m.num_ctx,
+        timeout_s=timeout_s,
+    )
+
+
 def build_components(
     settings: Settings | None = None,
     *,
     embedder: Embedder | None = None,
     llm: LLMGateway | None = None,
     llm_factory: Callable[[str], LLMGateway] | None = None,
+    gate_llm: LLMGateway | None = None,
     redis: Any = None,
     chroma_client: Any = None,
     telemetry: TelemetryCollector | None = None,
@@ -86,7 +133,12 @@ def build_components(
 
             def llm_factory(name: str) -> LLMGateway:
                 return OllamaGateway(
-                    name, m.ollama_base_url, m.temperature, m.seed, m.max_answer_tokens
+                    name,
+                    m.ollama_base_url,
+                    m.temperature,
+                    m.seed,
+                    m.max_answer_tokens,
+                    num_ctx=m.num_ctx,
                 )
 
         llm = llm_factory(s.models.tutor)
@@ -112,30 +164,67 @@ def build_components(
 
         telemetry = SqliteTelemetry(s.metrics_db_url)
 
+    sessions: SessionManager | SqliteSessionManager = (
+        SessionManager(redis, s.m0_turns)
+        if redis is not None
+        else SqliteSessionManager(s.session_db, s.m0_turns)
+    )
     episodic = EpisodicStore(chroma_client, s.chroma_collection, s.chroma_mode)
-    sketches = EpisodicSketchStore(episodic)
+    # M4 sketch: rebuilt lazily whenever the learner's memory version changes (any process)
+    sketches = EpisodicSketchStore(episodic, version_fn=sessions.mem_version)
     writer = MemoryWriter(embedder, episodic)
-    writer.on_written.append(sketches.invalidate)  # M4 rebuilt lazily after each write
-    return Components(
+
+    def bump(tenant_id: str) -> None:
+        sessions.bump_mem_version(tenant_id)
+
+    writer.on_written.append(bump)  # invalidates M4 + the decision cache in every process
+    writer.on_written.append(sketches.invalidate)
+
+    verifier = None
+    if s.ablation.use_escalation:
+        if gate_llm is None and s.verify.mode != "lexical":
+            gate_llm = gate_llm_from_settings(s, timeout_s=10.0)
+        verifier = ResponseVerifier(s.verify.mode, gate_llm, s.verify.llm_max_tokens)
+    semantic = SemanticStore(chroma_client, s.chroma_collection, s.chroma_mode)
+    profiles = ProfileStore(
+        RedisKV(redis)
+        if redis is not None
+        else SqliteKV(":memory:" if s.session_db == ":memory:" else s.profile.db)
+    )
+    reranker = None
+    if s.routes.deep_rerank:
+        from amic.memory.rerank import CrossEncoderReranker
+
+        reranker = CrossEncoderReranker(s.routes.rerank_model, s.routes.rerank_device)
+    comps = Components(
         settings=s,
         embedder=embedder,
         episodic=episodic,
-        retrieval=ChromaRetrievalEngine(episodic, s.routes),
-        assembler=ContextAssembler(),
-        prompts=PromptBuilder(),
-        llm=llm,
-        sessions=(
-            SessionManager(redis, s.m0_turns)
-            if redis is not None
-            else SqliteSessionManager(s.session_db, s.m0_turns)
+        retrieval=ChromaRetrievalEngine(
+            episodic, s.routes, semantic, profiles=profiles, embedder=embedder, reranker=reranker
         ),
+        assembler=ContextAssembler(),
+        prompts=PromptBuilder.for_profile(s.prompt_profile),
+        llm=llm,
+        sessions=sessions,
         telemetry=telemetry,
         writer=writer,
         planner=RoutePlanner(s.routes),
         sketches=sketches,
         config_hash=s.config_hash(),
         llm_factory=llm_factory,
+        verifier=verifier,
+        gate_llm=gate_llm,
+        semantic=semantic,
+        profiles=profiles,
+        decision_cache=(
+            DecisionCache(s.cache.nbits, s.cache.ttl_s) if s.ablation.use_cache else None
+        ),
     )
+    if redis is not None:
+        comps.extras["redis"] = redis
+    comps.write_queue = build_queue(comps)
+    return comps
 
 
 def build_arm(name: ArmName, comps: Components) -> PipelineArm:

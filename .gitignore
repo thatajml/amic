@@ -22,6 +22,8 @@ data/
 chroma_data/
 *.db
 *.parquet
+# CI gate-regression fixture (synthetic edu features + labels, no text)
+!tests/fixtures/*.parquet
 models/
 runs/
 mlruns/

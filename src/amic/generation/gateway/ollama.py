@@ -16,12 +16,23 @@ class OllamaGateway:
         seed: int = 0,
         max_tokens: int = 256,
         keep_alive: str = "30m",
+        num_ctx: int | None = None,
+        timeout_s: float | None = None,
     ) -> None:
+        """`num_ctx` None keeps Ollama's default context; calls sharing one model must agree on
+        it or Ollama reloads the model. `timeout_s` bounds the HTTP call (Tier 2 fails open)."""
         import ollama
 
         self.model = model
-        self._client = ollama.Client(host=base_url)
-        self._defaults = {"temperature": temperature, "seed": seed, "num_predict": max_tokens}
+        kw = {"timeout": timeout_s} if timeout_s is not None else {}
+        self._client = ollama.Client(host=base_url, **kw)
+        self._defaults: dict[str, float | int] = {
+            "temperature": temperature,
+            "seed": seed,
+            "num_predict": max_tokens,
+        }
+        if num_ctx is not None:
+            self._defaults["num_ctx"] = num_ctx
         self._keep_alive = keep_alive
 
     def chat(
@@ -57,3 +68,26 @@ class OllamaGateway:
             prefill_ms=(r.get("prompt_eval_duration") or 0) / 1e6,
             decode_ms=(r.get("eval_duration") or 0) / 1e6,
         )
+
+    def draft_logprobs(
+        self, messages: list[Message], max_tokens: int = 16, top: int = 5
+    ) -> tuple[str, list[list[float]], float]:
+        """A short greedy draft with the top-`top` log-probabilities of every generated token
+        (S5 uncertainty signal; needs Ollama >= 0.12). Returns (text, per-token top logprobs,
+        wall ms)."""
+        opts = {**self._defaults, "num_predict": max_tokens, "temperature": 0.0}
+        t = time.perf_counter()
+        r = self._client.chat(
+            model=self.model,
+            messages=messages,
+            options=opts,
+            keep_alive=self._keep_alive,
+            logprobs=True,
+            top_logprobs=top,
+        )
+        wall = (time.perf_counter() - t) * 1000
+        per_token = []
+        for tok in r.get("logprobs") or []:
+            tops = tok.get("top_logprobs") or [{"logprob": tok.get("logprob", 0.0)}]
+            per_token.append([float(x["logprob"]) for x in tops])
+        return r["message"]["content"], per_token, wall

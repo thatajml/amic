@@ -21,6 +21,76 @@ def test_daily_quota_detected_and_parsed():
     assert daily_quota_retry_after(e) == pytest.approx(21 * 3600 + 7 * 60 + 30.3)
 
 
+def test_daily_quota_detected_when_details_only_in_list_body():
+    # Gemini's OpenAI-compatible endpoint: body is a JSON list, so str(e) == "Error code: 429".
+    req = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    body = [
+        {
+            "error": {
+                "code": 429,
+                "message": "You exceeded your current quota ... Generate content requests per "
+                "day limit exceeded on Free Tier.\nPlease retry in 5h55m39.39s.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        }
+    ]
+    e = openai.RateLimitError(
+        "Error code: 429", response=httpx.Response(429, request=req), body=body
+    )
+    assert daily_quota_retry_after(e) == pytest.approx(5 * 3600 + 55 * 60 + 39.39)
+
+
+class _StubCompletions:
+    def __init__(self, daily_capped: bool) -> None:
+        self.daily_capped = daily_capped
+        self.calls = 0
+
+    def create(self, **_kw: object) -> object:
+        from types import SimpleNamespace
+
+        self.calls += 1
+        if self.daily_capped:
+            raise _rate_limit("requests per day limit exceeded. Please retry in 1h0m0s.")
+        msg = SimpleNamespace(content='{"ok": true}')
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=None)
+
+
+def _gateway_with(*capped: bool):  # noqa: ANN202
+    from types import SimpleNamespace
+
+    from amic.generation.gateway.openai_compat import OpenAICompatGateway
+
+    gw = OpenAICompatGateway("m", "https://example.invalid/v1", api_key="k")
+    stubs = [_StubCompletions(c) for c in capped]
+    gw._clients = [SimpleNamespace(chat=SimpleNamespace(completions=s)) for s in stubs]  # type: ignore[assignment]
+    return gw, stubs
+
+
+def test_rotates_to_next_key_when_daily_cap_reached():
+    gw, stubs = _gateway_with(True, False)
+    assert gw.chat([{"role": "user", "content": "x"}]).text == '{"ok": true}'
+    assert stubs[0].calls == 1 and stubs[1].calls == 1 and gw._active == 1
+    gw.chat([{"role": "user", "content": "y"}])  # stays on the working key
+    assert stubs[0].calls == 1 and stubs[1].calls == 2
+
+
+def test_raises_daily_quota_when_all_keys_spent():
+    gw, _ = _gateway_with(True, True)
+    with pytest.raises(DailyQuotaExceeded) as ei:
+        gw.chat([{"role": "user", "content": "x"}])
+    assert ei.value.retry_after_s == pytest.approx(3600)
+
+
+def test_keys_from_env_order_and_dedup(monkeypatch: pytest.MonkeyPatch):
+    from amic.generation.gateway.openai_compat import _keys_from_env
+
+    monkeypatch.setenv("TESTKEY", "a")
+    monkeypatch.setenv("TESTKEY_2", "b")
+    monkeypatch.setenv("TESTKEY_3", "a")
+    monkeypatch.setenv("TESTKEY_4", " ")
+    assert _keys_from_env("TESTKEY") == ["a", "b"]
+
+
 def test_per_minute_limit_is_not_daily():
     assert (
         daily_quota_retry_after(_rate_limit("Requests per minute exceeded, retry in 12s")) is None

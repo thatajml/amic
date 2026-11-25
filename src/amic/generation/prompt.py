@@ -1,6 +1,13 @@
-"""PromptBuilder. Identical template for every arm, so arms differ only in the memory block."""
+"""PromptBuilder. Identical template for every arm, so arms differ only in the memory block.
+
+Two profiles: `tutor` (the education study; byte-identical to the first results, so the
+generation cache still matches) and `assistant` (LongMemEval: a general assistant that is told
+the current date, since many questions are about time).
+"""
 
 from __future__ import annotations
+
+from datetime import datetime
 
 from amic.contracts.models import Turn
 from amic.generation.gateway.base import Message
@@ -13,16 +20,47 @@ SYSTEM = (
     "the answer (for example, refer back to an earlier mistake). Never invent past interactions "
     "that are not in the memory or the conversation."
 )
+SYSTEM_ASSISTANT = (
+    "You are a helpful personal assistant. Answer the user's latest message concisely. "
+    "If a 'Memory' section is present, it holds dated excerpts from your earlier conversations "
+    "with this user; use it to answer questions about the user and their past. If the answer "
+    "depends on earlier conversations and is in neither the memory nor the current "
+    "conversation, say that you do not know instead of guessing."
+)
+PROFILES: dict[str, tuple[str, str, bool]] = {
+    # profile -> (system prompt, memory header, show the current date)
+    "tutor": (SYSTEM, "Learner memory (from earlier sessions)", False),
+    "assistant": (SYSTEM_ASSISTANT, "Memory (excerpts from earlier conversations)", True),
+}
 
 
 class PromptBuilder:
-    def __init__(self, system: str = SYSTEM) -> None:
+    def __init__(
+        self,
+        system: str = SYSTEM,
+        memory_header: str = "Learner memory (from earlier sessions)",
+        show_date: bool = False,
+    ) -> None:
         self.system = system
+        self.memory_header = memory_header
+        self.show_date = show_date
 
-    def build(self, query: str, m0_turns: list[Turn], memory_block: str = "") -> list[Message]:
+    @classmethod
+    def for_profile(cls, profile: str) -> PromptBuilder:
+        return cls(*PROFILES[profile])
+
+    def build(
+        self,
+        query: str,
+        m0_turns: list[Turn],
+        memory_block: str = "",
+        now: datetime | None = None,
+    ) -> list[Message]:
         system = self.system
+        if self.show_date and now is not None:
+            system += f"\n\nCurrent date: {now:%Y/%m/%d (%a) %H:%M}"
         if memory_block:
-            system += f"\n\nLearner memory (from earlier sessions):\n{memory_block}"
+            system += f"\n\n{self.memory_header}:\n{memory_block}"
         msgs: list[Message] = [{"role": "system", "content": system}]
         msgs += [{"role": t.role, "content": t.text} for t in m0_turns]
         msgs.append({"role": "user", "content": query})

@@ -1,6 +1,11 @@
 """Shared data types for the frozen AMIC interfaces (brief section 8, plan section 3).
 
 Every layer imports these. Changing a field here is a contract change: flag it.
+
+Contract changes since the first results (a2eab84), all additive, flagged here:
+- LatencySplit.escalation: retrieval + regeneration time of a verify-triggered retry.
+- MemoryDecision.escalated_from: set when the verifier escalated the gate's route (P6).
+- WriteIntent: the async write path's queue message (brief section 7, L7).
 """
 
 from __future__ import annotations
@@ -88,6 +93,7 @@ class MemoryDecision(BaseModel):
     plan: RetrievalPlan = Field(default_factory=RetrievalPlan)
     token_budget: int = 0
     rationale: str = ""
+    escalated_from: Route | None = None  # the gate's route when the verifier escalated it
 
 
 class MemoryItem(BaseModel):
@@ -115,6 +121,7 @@ class LatencySplit(BaseModel):
     prefill: float = 0.0  # of which: prompt processing (provider-reported; 0 if unknown)
     decode: float = 0.0  # of which: token generation
     verify: float = 0.0
+    escalation: float = 0.0  # retry after a failed verify: retrieval + regeneration
     total: float = 0.0
 
     @property
@@ -156,3 +163,18 @@ class AgentResponse(BaseModel):
     decision: MemoryDecision
     items: list[MemoryItem] = Field(default_factory=list)
     trace_id: str
+
+
+class WriteIntent(BaseModel):
+    """One finished turn, queued for consolidation (P5: never written on the response path)."""
+
+    tenant_id: str
+    session_id: str
+    record_id: str
+    query: str
+    answer: str
+    ts: datetime
+    metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    # "turn": a finished exchange; "remember"/"forget": an explicit command (route WRITE), whose
+    # payload is in `query` (additive field; old queued intents default to "turn")
+    op: Literal["turn", "remember", "forget"] = "turn"

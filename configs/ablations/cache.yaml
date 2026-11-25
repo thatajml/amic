@@ -1,0 +1,6 @@
+# Decision cache in front of Tier 1 (brief 6.4; pre-registered C1).
+ablation:
+  use_cache: true
+cache:
+  nbits: 16
+  ttl_s: 900

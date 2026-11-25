@@ -127,7 +127,7 @@ def test_session_backends_are_equivalent(backend, tmp_path):
     from amic.service.session import SessionManager, SqliteSessionManager
 
     sm = (
-        SessionManager(fakeredis.FakeRedis(), m0_turns=2)
+        SessionManager(fakeredis.FakeRedis(server=fakeredis.FakeServer()), m0_turns=2)
         if backend == "redis"
         else SqliteSessionManager(str(tmp_path / "s.sqlite"), m0_turns=2)
     )

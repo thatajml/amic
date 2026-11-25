@@ -28,9 +28,23 @@ four-arm runner with ablations · break-even table · minimal Decision Inspector
 - Writes are synchronous after the response is returned (a background task), not a Redis-stream worker.
 - DEEP = wide-k + MMR. Cross-encoder rerank and the entity hop come later.
 
-**Out (future work in the paper, in this order):** M5 remainder (M2 + async worker + DecisionCache) → M7 verify and
+**Out of the 7-day sprint:** M5 remainder (M2 + async worker + DecisionCache) → M7 verify and
 escalate → M6 Tier 2 + distillation → full docker-compose app → Educator Console → LongMemEval.
-The design degrades cleanly to Tier 0 + Tier 1 (§10), so cutting these needs no redesign.
+The design degrades cleanly to Tier 0 + Tier 1 (§10), so cutting these needed no redesign.
+
+**Update 2026-11-23:** built afterwards as a pre-registered extension (section 9): M2 facts with
+validity intervals, the async write path (SQLite / Redis Streams queue + ConsolidationWorker), the
+DecisionCache, verify-and-escalate, Tier 2 + distillation buffer, and LongMemEval.
+
+**Update 2026-11-23 (evening), section 10:** the rest of the brief: the M3 learner profile (EWMA
+mastery, updated by the worker), the brief's SHALLOW (M3 + top M2 facts) and DEEP (M1 + M2 + M3,
+MMR, cross-encoder rerank, one entity hop) routes, the WRITE route (`/remember`, `/forget`), the
+ForgettingManager (decay, TTL, compaction, erasure), the S5 uncertainty signal, the Tier-1
+distillation retrain, scheduled jobs (`python -m amic.jobs`), shadow mode against `always`, the
+Educator Console (`ui/educator.py`), performance-budget tests, the CI gate-metric regression
+check and real-Redis tests in CI. Not on `main`: the docker-compose app and usage dashboard
+(`dashboard-and-startup-command`) and the chat UI / Decision Inspector (`ui-chat`), both on
+unmerged branches by the owner's choice.
 
 **Key efficiency idea:** gate decisions can be **replayed offline**. Once each query's
 FeatureVector, oracle label and per-arm cost are logged, every ablation and λ sweep on *decision*
@@ -324,3 +338,94 @@ Each day ends with the system runnable and the tests green. **DoD** = definition
 ## 8. Open items
 
 - A `GEMINI_API_KEY` in `.env` before Day 3 labelling.
+
+## 9. Extension (2026-11-23): the deferred components, pre-registered
+
+After the first results (docs/results/main.md, commit a2eab84) the components cut in section 1
+are being built: verify-and-escalate (M7), Tier 2 + distillation (M6), the decision cache, M2 fact
+extraction and the async write worker (M5 remainder), and LongMemEval. The first results stay the
+primary results; everything below is an extension, and this section is committed **before any
+of its live runs**.
+
+**Rules**
+- Existing runs, labels, features, models and traces are never overwritten; new runs get new names.
+- Every new feature is off by default and switched on by a file in `configs/ablations/`.
+- Tutor answers are served from the generation cache wherever the prompt is identical to one
+  already generated; identical (answer, baseline) pairs reuse the earlier pairwise judgment.
+- Decision rule: a component helps only if the paired difference's 95% CIs clustered by probe
+  **and** by learner both exclude 0 in the helpful direction (8 test learners: the learner
+  bootstrap alone undercovers). Otherwise it is reported as "no detectable effect".
+- Every row below is reported, whatever it shows.
+
+| ID | Comparison | Primary metric | Data |
+|---|---|---|---|
+| E1 | `amic_esc` − `amic` | paired net win vs `always`; memory tokens | edu test, 3 seeds |
+| E2 | `amic_lam1_esc` − `amic_lam1` | same | same |
+| E3 | `never_esc` vs `amic_esc` (verify-only vs gate-first) | same | same |
+| E4 | verify mode: lexical vs llm vs both (offline replay) | net win; P(esc) | same |
+| T1 | full cascade vs the same band failing open to SHALLOW (replay) | expected cost at lambda = 4 | edu test |
+| T2 | `amic_full` − `amic` | paired net win; memory tokens | live |
+| F1 | `always_m2` − `always_shallow` | paired net win; memory tokens | live |
+| V1 | `amic_v2` vs `always`, vs `always_shallow` | net win; memory tokens | live |
+| L1 | gate decisions on LongMemEval_S (cleaned) | retrieval rate; false-skip rate on answerable questions | 500 questions |
+| L2 | `lme_amic`, `lme_amic_esc` vs `lme_always` / `lme_always_shallow` / `lme_never` | QA accuracy difference (CI over questions) | stratified 150 |
+| B1 | break-even with measured C_T2, C_ver, P(esc) | gate overhead vs savings | live traces |
+| C1 | decision cache | hit rate; wrong-hit rate | replay |
+| W1 | write path | enqueue ms vs inline-write ms; time to visibility | benchmark |
+
+Fixed settings: verifier mode `both`, escalation route SHALLOW (at most one retry), Tier 2 band
+sized to 12% of validation traffic with a hard 12% cap and an 800 ms timeout (both fail open to
+SHALLOW), cache key = (learner, memory version, 16-bit LSH of the query vector, M0 present),
+TTL 15 min. LongMemEval runs at temperature 0, one run per arm, with the edu-trained Tier 1.
+
+**Deviations recorded while running the extension (none changes a pre-registered comparison)**
+- Decision rule tightened before any extension run: BOTH the probe- and the learner-clustered CI
+  must exclude 0 (the learner bootstrap alone flagged `amic_no_s3` vs `always`, which the probe
+  bootstrap does not; with 8 learners it undercovers).
+- Tier 2 and the LLM verifier run on `llama3.1:8b`, not the brief's 3B model: on the 8 GB GPU
+  Ollama cannot keep both resident (5.28 GB + 2.21 GB; one is evicted per load).
+- Tier-2 band: isotonic calibration leaves 8 distinct p values on validation (53 of 134 rows at
+  one value), so no band holds exactly 12%. The brief sets a ceiling, so the band is the widest
+  one at or under 12% of validation traffic: [0, 0.27], 4.4% of validation, 6.8% of test.
+- LongMemEval: the escalation run reuses the tutoring verifier prompt; record ids include the
+  session position (session ids repeat inside some haystacks).
+
+## 10. Completion (2026-11-23): the rest of the brief, pre-registered
+
+After section 9, the remaining brief components are being built: the M3 learner profile (EWMA
+mastery, updated by the worker), the brief's SHALLOW route (M3 + top M2 facts) and DEEP route (wide
+M1 + M2 + M3, MMR, cross-encoder rerank, one entity hop), the WRITE route (`/remember`,
+`/forget`), the ForgettingManager (decay, TTL, compaction, erasure), the S5 uncertainty signal,
+the distillation retrain of Tier 1, scheduled jobs (retrain, threshold recalibration,
+forgetting), shadow mode against `always`, performance-budget tests, a CI gate-metric regression
+check, real-Redis tests, and the Educator Console. Section 9's rules and decision rule apply
+unchanged; this section is committed **before any of its runs**.
+
+| ID | Comparison | Primary metric | Data |
+|---|---|---|---|
+| P1 | `always_m3` − `always_shallow` (brief SHALLOW: M3 + top-3 M2 facts, vs top-3 M1 turns) | paired net win vs `always`; memory tokens | edu test, 3 seeds |
+| D1 | `always_deep2` − `always` (brief DEEP: M1+M2+M3, MMR, rerank, 1 hop, vs wide M1 + MMR) | same | same |
+| V3 | `amic_v3` vs `always`, vs `always_shallow` (Tier 0-2, cache, escalation, P1 and D1 routes) | net win; memory tokens | same |
+| S1 | Tier 1 + S5 (draft-entropy features) − Tier 1 (offline replay, retrained on train) | test AUC difference; expected cost at lambda = 4 | edu test |
+| DS1 | Tier 1 retrained with Tier-2 distilled weak labels (weight 0.5 and 1.0) − Tier 1 | same | edu test |
+| PB1 | performance budgets: Tier 0, Tier 0+1, sketch affinity at 10^2 / 10^3 / 10^4 records | p50 / p95 ms (measured; CI asserts loose bounds) | synthetic |
+
+Fixed settings: M3 EWMA alpha 0.3, prior 0.5, block <= 200 tokens; SHALLOW = M3 + 3 facts
+(budget 400 tokens); DEEP = k 12 from a pool of 30 M1 + 10 M2 candidates, MMR lambda 0.7,
+`cross-encoder/ms-marco-MiniLM-L-6-v2` on CPU, one hop (<= 4 entities from the top 5 candidates,
+<= 4 extra candidates per store), budget 1000 tokens. Profiles are rebuilt from the frozen
+history and its extracted facts (`scripts/build_profiles.py`, no LLM). S5: a 16-token draft of
+the memory-less answer (same prompt as SKIP, temperature 0) from the tutor model; features = mean
+and max token entropy over the top-5 logprobs. Distillation: the 395 Tier-2 verdicts on the
+train split (`data/distill/replay_train.jsonl`) as extra rows, label = verdict != SKIP.
+
+**Recorded while running section 10 (none changes a pre-registered comparison)**
+- The service smoke test (`scripts/smoke_service.py`: API and worker as separate processes, real
+  Redis and Chroma server) found that a turn still queued when its learner was erased was
+  consolidated afterwards and resurrected an M1 record. Fixed before reporting: erasure leaves an
+  `erased_at` tombstone, the worker drops intents from before it and purges the writes of one it
+  was consolidating when the erasure landed (regression test in tests/integration/test_commands.py).
+- S5 is measured offline only (replay); its live cost is the draft time, 357 ms p50 on the 8B
+  tutor model (data/edu/s5.parquet `s5_ms`), so no live S5 run was made.
+- DEEP v2 retrieval costs ~170 ms p50 with the cross-encoder on CPU (the GPU holds the tutor).
+

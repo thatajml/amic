@@ -10,12 +10,13 @@ import numpy as np
 import pandas as pd
 
 from amic.contracts.config import Settings
-from amic.contracts.models import Route
+from amic.contracts.models import RequestContext, Route
 from amic.control.controller import Controller
 from amic.control.route_planner import RoutePlanner
 from amic.control.signals.bus import FEATURES, S3_FEATURES, Signals
 from amic.control.thresholds import expected_cost
 from amic.control.tier1 import Tier1Model
+from amic.control.tier2 import _Tier2Base
 
 RETRIEVE = {Route.SHALLOW.value, Route.DEEP.value}
 
@@ -36,21 +37,35 @@ def s3_ablated(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def replay(df: pd.DataFrame, settings: Settings, tier1: Tier1Model | None) -> pd.DataFrame:
+def replay(
+    df: pd.DataFrame,
+    settings: Settings,
+    tier1: Tier1Model | None,
+    tier2: _Tier2Base | None = None,
+) -> pd.DataFrame:
+    """Decisions for every row, in row order. `tier2` (ReplayTier2) serves recorded Tier-2
+    verdicts keyed by probe_id when settings.ablation.tiers == "full"."""
     if not settings.ablation.use_sketch_probe:
         df = s3_ablated(df)
-    ctl = Controller(settings, RoutePlanner(settings.routes), tier1)
+    ctl = Controller(settings, RoutePlanner(settings.routes), tier1, tier2=tier2)
     rows: list[dict[str, Any]] = []
-    for rec in df[["probe_id", *FEATURES]].to_dict("records"):
-        feats = {k: float(rec[k]) for k in FEATURES}
+    # extra model features present in the frame (e.g. S5) are passed through as signals
+    extra = [f for f in (tier1.features if tier1 else []) if f not in FEATURES and f in df]
+    for rec in df[["probe_id", *FEATURES, *extra]].to_dict("records"):
+        feats = {k: float(rec[k]) for k in (*FEATURES, *extra)}
         sig = Signals(np.zeros(1), feats, None, False, 0.0, 0.0)
-        d, _ = ctl.decide_signals(sig)
+        ctx = RequestContext(
+            request_id=rec["probe_id"], tenant_id="", session_id="replay", query="", arm="amic"
+        )
+        d, tm = ctl.decide_signals(sig, ctx)
         rows.append(
             {
                 "probe_id": rec["probe_id"],
                 "route": d.route.value,
                 "resolved_by": d.resolved_by.value,
                 "p": d.p,
+                "tier2_status": tm.tier2_status,
+                "tier2_ms": tm.tier2,
             }
         )
     return df[["probe_id", "label_required", "depth", "category", "split"]].merge(

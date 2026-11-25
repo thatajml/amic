@@ -67,13 +67,24 @@ def main() -> None:
     ap.add_argument("--baseline", default="always")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--wait-for-quota", action="store_true", help="sleep through daily-cap resets")
+    ap.add_argument(
+        "--reuse-from",
+        nargs="*",
+        default=[],
+        help="earlier runs whose verdicts are reused for byte-identical answer pairs, searched "
+        "in this order (put the run's parent first; see amic/eval/judgecache.py)",
+    )
     a = ap.parse_args()
+    from amic.eval.judgecache import PairwiseCache
     from amic.eval.quota import run_with_quota
 
     llm = judge_from_settings(Settings().models)
     learners = {lr.learner_id: lr for lr in edu.load_learners()}
     probes = {p.probe_id: p for p in edu.load_probes()}
     base = load_answers(a.baseline)
+    cache = PairwiseCache.load(a.reuse_from, a.baseline)
+    if a.reuse_from:
+        print(f"reusable verdicts: {len(cache)} from {a.reuse_from}", flush=True)
 
     jobs: list[tuple[str, tuple[str, int]]] = []
     judges: dict[str, Callable[[tuple[str, int]], dict]] = {}
@@ -101,6 +112,9 @@ def main() -> None:
                 "route": mine[k]["route"],
                 "base_route": base[k]["route"],
             }
+            if "final_route" in mine[k]:  # runs with verify-and-escalate
+                row["final_route"] = mine[k]["final_route"]
+                row["escalated"] = bool(mine[k].get("escalated"))
             if x.strip() == b.strip():
                 return {
                     **row,
@@ -109,6 +123,10 @@ def main() -> None:
                     "fab_run": None,
                     "fab_base": None,
                 }
+            hit = cache.get(pid, seed, x, b)
+            if hit is not None:
+                source, verdict = hit
+                return {**row, **verdict, "identical": False, "reused": source}
             p = probes[pid]
             lr = learners[p.learner_id]
             run_is_a = random.Random(f"{run}|{pid}|{seed}").random() < 0.5
@@ -122,13 +140,15 @@ def main() -> None:
                 a=ra,
                 b=rb,
             )
+            raw = ""
             for _ in range(3):
                 try:
-                    j = json.loads(
-                        llm.chat(
-                            [{"role": "user", "content": prompt}], json_mode=True, max_tokens=300
-                        ).text
-                    )
+                    raw = llm.chat(
+                        [{"role": "user", "content": prompt}], json_mode=True, max_tokens=1024
+                    ).text
+                    j = json.loads(raw)
+                    if isinstance(j, list) and len(j) == 1 and isinstance(j[0], dict):
+                        j = j[0]  # the judge occasionally wraps its object in a list
                     w = str(j["winner"]).strip().upper()
                     if w not in {"A", "B", "TIE"}:
                         raise ValueError(w)
@@ -136,7 +156,7 @@ def main() -> None:
                 except (ValueError, KeyError, TypeError):
                     continue
             else:
-                raise RuntimeError(f"{run} {pid}: unparseable")
+                raise RuntimeError(f"{run} {pid}: unparseable: {raw[:300]!r}")
             result = "tie" if w == "TIE" else ("win" if (w == "A") == run_is_a else "loss")
             fa, fb = bool(j.get("fabricated_A")), bool(j.get("fabricated_B"))
             return {

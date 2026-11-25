@@ -1,0 +1,14 @@
+{
+  "metrics": {
+    "auc": 0.6706221198156681,
+    "cost": 0.5217391304347826,
+    "retrieval_rate": 0.9254658385093167,
+    "share_tier0": 0.18012422360248448
+  },
+  "tolerance": {
+    "auc": 0.02,
+    "cost": 0.02,
+    "retrieval_rate": 0.05,
+    "share_tier0": 0.02
+  }
+}
