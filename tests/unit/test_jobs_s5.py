@@ -94,6 +94,24 @@ def test_forget_job_runs_over_components(labelled, comps):
     assert out["tenants"] >= 1 and out["dry_run"]
 
 
+def test_nightly_keeps_going_when_a_job_fails(tmp_path, monkeypatch):
+    """The scheduled container runs `nightly --every 24`: a failing job must not stop the rest."""
+    s = Settings()
+    s.jobs.log_path = str(tmp_path / "jobs.jsonl")
+
+    def boom(s, dry_run=False):
+        raise FileNotFoundError("data/edu/labels.parquet")
+
+    monkeypatch.setattr(
+        jobs, "JOBS", {"retrain": boom, "forget": lambda s, dry_run=False: {"ok": 1}}
+    )
+    out = jobs.nightly(s)
+    assert out["retrain"] == {"error": "FileNotFoundError: data/edu/labels.parquet"}
+    assert out["forget"] == {"ok": 1}
+    log = [json.loads(x) for x in (tmp_path / "jobs.jsonl").read_text().splitlines()]
+    assert log[0]["job"] == "retrain" and "error" in log[0]
+
+
 # ----------------------------------------------------------------------------- S5
 def test_token_entropy():
     assert token_entropy([0.0]) == 0.0

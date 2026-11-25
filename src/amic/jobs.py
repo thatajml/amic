@@ -174,7 +174,16 @@ JOBS = {"retrain": retrain, "recalibrate": recalibrate, "forget": forget}
 
 
 def nightly(s: Settings, dry_run: bool = False) -> dict[str, Any]:
-    return {name: fn(s, dry_run) for name, fn in JOBS.items()}
+    """All jobs in order. One failing (e.g. retrain without a labelled set on a fresh install)
+    is logged and does not stop the others, so a scheduled loop keeps running."""
+    out: dict[str, Any] = {}
+    for name, fn in JOBS.items():
+        try:
+            out[name] = fn(s, dry_run)
+        except Exception as e:  # noqa: BLE001 - reported per job, the others still run
+            out[name] = {"error": f"{type(e).__name__}: {e}"}
+            _log(s, name, out[name])
+    return out
 
 
 def main() -> None:
@@ -188,9 +197,14 @@ def main() -> None:
     s = load_settings(a.config)
     fn = nightly if a.job == "nightly" else JOBS[a.job]
     while True:
-        print(json.dumps(fn(s, a.dry_run), indent=2, default=float), flush=True)
         if a.every is None:
+            print(json.dumps(fn(s, a.dry_run), indent=2, default=float), flush=True)
             return
+        try:
+            print(json.dumps(fn(s, a.dry_run), indent=2, default=float), flush=True)
+        except Exception as e:  # noqa: BLE001 - a scheduler must survive a failed run
+            print(f"[jobs] {a.job} failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        print(f"[jobs] next run in {a.every:g} h", flush=True)
         time.sleep(a.every * 3600)
 
 

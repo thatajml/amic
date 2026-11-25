@@ -35,9 +35,9 @@ fact memory with validity intervals + the M3 learner profile (EWMA mastery), the
 WRITE route (`/remember`, `/forget`), an async write path (SQLite or Redis Streams queue +
 ConsolidationWorker), the ForgettingManager (decay, TTL, compaction, erasure), scheduled jobs
 (distillation retrain, threshold recalibration, forgetting), shadow mode against `always`, the
-Educator Console, performance-budget tests and a CI gate-metric regression check. The chat UI /
-Decision Inspector and the docker-compose app + usage dashboard live on the unmerged `ui-chat`
-and `dashboard-and-startup-command` branches.
+Educator Console, performance-budget tests and a CI gate-metric regression check. This branch
+(`full-stack-docker`) adds the usage dashboard, one-command startup and the docker-compose stack
+with every service. The chat UI / Decision Inspector lives on the unmerged `ui-chat` branch.
 
 The first evaluation (805 labelled probes, 98 hand labels, seven live runs × 3 seeds, pairwise
 judging) was followed by two **pre-registered extensions** for the later components
@@ -129,8 +129,9 @@ variables:
   `--config` to `python -m amic.eval.runner` and `python -m amic.demo`. A YAML file outranks
   `.env`. The API and dashboard don't read these files.
 - `configs/pricing.yaml` holds the per-model prices the dashboard uses.
-- Under Docker, `docker-compose.yml` sets the Ollama URL, the Redis and Chroma hosts and the
-  shadow baseline for the containers. Those values override `.env`.
+- Under Docker, `docker-compose.yml` sets the Ollama URL, the Redis and Chroma hosts, the
+  shadow baseline, and the shared-store topology (Redis sessions and write queue, Chroma server)
+  for the containers. Those values override `.env`.
 
 ## Run with Docker (one command)
 
@@ -145,17 +146,35 @@ variables:
   read the same settings as a local run.
 
 ```bat
-docker compose up -d                 :: build once, then API :8080, dashboard :8501, Redis, Chroma
+docker compose up -d                 :: build once, then start everything below
 docker compose run --rm chat         :: terminal chat (same options as chat-amic.cmd, e.g. --frozen)
+docker compose logs -f worker jobs   :: what the background services are doing
 docker compose down                  :: stop everything
 docker compose up -d --build         :: rebuild after changing code
 ```
 
-`data/`, `models/` and `configs/` are shared with the host, so traces, memory, the trained Tier-1
-model and the dashboard are the same as in a local run. The image uses CPU-only torch, because
-it only embeds queries, and has the embedding model built in. It is about 3.4 GB. The services
-restart with Docker Desktop. Don't run this and `start-amic.cmd` at the same time, because both
-use ports 8080 and 8501.
+| Service | What it is |
+|---|---|
+| `api` | `POST /chat`, `GET`/`DELETE /learners/{id}`, `/traces` on http://localhost:8080 (docs at `/docs`) |
+| `worker` | Consolidation worker: stores each answered turn in M1, updates the M3 profile, applies `/remember` and `/forget`. Set `AMIC_WRITEPATH__EXTRACT_FACTS=true` in `.env` to also extract M2 facts with the host's Ollama |
+| `educator` | Educator Console on http://localhost:8502: a learner's memory and gate decisions, plus close-fact, add-note, correct-mastery and erase |
+| `jobs` | Nightly jobs, once at start and then every 24 h: Tier-1 retrain with a promotion gate, band recalibration, forgetting. Results go to `data/jobs.jsonl` |
+| `dashboard` | Usage and savings dashboard on http://localhost:8501 |
+| `redis`, `chroma` | Shared stores: sessions, memory version, M3 profiles and the write queue in Redis; M1 and M2 in the Chroma server |
+
+The API, worker, console and jobs are separate processes. So under Docker, memory lives in the
+Redis and Chroma containers (named volumes `redis-data` and `chroma-data`), not in `data/chroma`
+or `data/sessions.sqlite`. The API answers without waiting for the worker. If the worker is
+stopped, new turns wait in the Redis stream until it is back. The terminal chat is the
+exception: like `chat-amic.cmd`, it runs in one process on `data/chroma` (the seeded `edu-*`
+learners) and writes its own turns.
+
+`data/`, `models/` and `configs/` are shared with the host, so traces, the trained Tier-1 model
+and the dashboard are the same as in a local run. The image uses CPU-only torch, because it only
+embeds queries, and has the embedding model built in. It is about 3.4 GB. The services restart
+with Docker Desktop. Don't run this and `start-amic.cmd` at the same time, because both use
+ports 8080 and 8501. The Educator Console and the API have no login, so their ports are bound to
+localhost only.
 
 Run `docker compose` from a normal Windows terminal (PowerShell or cmd). From Git Bash, a
 lowercase `/c/...` path can make the build stop with `additional privileges requested`.
@@ -310,7 +329,9 @@ docs/             brief, plan, generated results
 - Paper artefacts (data, answers, judgments, models): GitHub releases `artifacts-2026-11-23*`.
 - `ui-chat`: a Streamlit chat UI to run any LLM (local Ollama or any OpenAI-compatible API) with
   AMIC and inspect each decision. Not merged yet.
-- `dashboard-and-startup-command`: usage/cost dashboard and a one-command startup. Not merged yet.
+- `dashboard-and-startup-command`: usage/cost dashboard and a one-command startup.
+- `full-stack-docker`: `main` merged with `dashboard-and-startup-command`, plus the worker,
+  Educator Console and jobs services in docker-compose. Not merged into `main` yet.
 
 ## Ownership
 

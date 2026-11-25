@@ -1,6 +1,9 @@
 # The whole AMIC stack in one command:   docker compose up -d
 #   API        http://localhost:8080   (docs at /docs)
 #   Dashboard  http://localhost:8501
+#   Educator   http://localhost:8502   (Educator Console: memory, decisions, data rights)
+#   Background worker (consolidates each turn into memory) and jobs (nightly retrain,
+#              recalibrate, forget); logs: docker compose logs -f worker jobs
 #   Chat       docker compose run --rm chat [--learner me] [--frozen]
 #   Stop       docker compose down
 #
@@ -15,12 +18,18 @@ x-app: &app
   env_file:
     - path: .env
       required: false
-  environment:
+  environment: &env
     AMIC_MODELS__OLLAMA_BASE_URL: http://host.docker.internal:11434
     AMIC_REDIS_URL: redis://redis:6379/0
     AMIC_CHROMA_HOST: chroma
     AMIC_CHROMA_PORT: "8000"
     AMIC_TELEMETRY__SHADOW_BASELINE: "true"   # feeds the dashboard's savings view
+    # API, worker, console and jobs are separate processes, so they share memory through the
+    # servers: sessions, memory version, M3 profiles and the write queue in Redis, M1/M2 in the
+    # Chroma server (embedded Chroma files must not be written by several processes).
+    AMIC_SESSION_BACKEND: redis
+    AMIC_CHROMA_CLIENT: http
+    AMIC_WRITEPATH__QUEUE: redis
   volumes:
     - ./data:/app/data
     - ./models:/app/models
@@ -65,6 +74,49 @@ services:
     stdin_open: true
     tty: true
     profiles: ["chat"]
+    # The seeded edu learners live in data/chroma: the chat uses them in-process, exactly like
+    # chat-amic.cmd (one process, so the embedded store and an inline write path are safe).
+    environment:
+      <<: *env
+      AMIC_SESSION_BACKEND: sqlite
+      AMIC_CHROMA_CLIENT: embedded
+      AMIC_WRITEPATH__QUEUE: inline
+
+  # Consolidation worker (L7): turns queued WriteIntents into M1 records, M3 profile updates
+  # and, with AMIC_WRITEPATH__EXTRACT_FACTS=true in .env, LLM-extracted M2 facts (host Ollama).
+  # /remember and /forget are applied here too. Stopped: answers still work, and memory catches
+  # up from the Redis stream once it is back.
+  worker:
+    <<: *app
+    command: ["python", "-m", "amic.writepath.worker"]
+    restart: unless-stopped
+
+  # Educator Console (L1): what is remembered about a learner, the gate's decisions, and the
+  # data-rights actions (close a fact, add a note, correct mastery, erase). Bound to localhost
+  # only: it has no login.
+  educator:
+    <<: *app
+    command: ["streamlit", "run", "ui/educator.py", "--server.port", "8502",
+              "--server.address", "0.0.0.0", "--server.headless", "true",
+              "--browser.gatherUsageStats", "false"]
+    ports: ["127.0.0.1:8502:8502"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8502/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # Scheduled jobs: retrain Tier 1 with distilled Tier-2 labels (promoted to
+  # models/tier1_live.joblib only if it passes the validation gate), recalibrate the band,
+  # run the forgetting manager. Once at start, then every 24 h; results in data/jobs.jsonl.
+  # Retrain/recalibrate need the labelled set in data/edu/; without it they log an error and
+  # the forgetting job still runs.
+  jobs:
+    <<: *app
+    command: ["python", "-m", "amic.jobs", "nightly", "--every", "24"]
+    restart: unless-stopped
 
   # Same services and volumes as docker-compose.dev.yml (same project name), so either file
   # manages the one Redis / Chroma. Used when session_backend=redis or chroma_client=http.

@@ -113,3 +113,35 @@ def test_store_migrates_old_db_and_annotates(tmp_path):
     tel2.annotate("r0", baseline_memory_tokens=640)
     got = usage.load_traces(f"sqlite:///{tmp_path / 'new.db'}")
     assert got.loc[0, "baseline_memory_tokens"] == 640 and got.loc[0, "model"] == "big"
+
+
+def test_store_survives_a_concurrent_schema_race(tmp_path, monkeypatch):
+    """docker compose starts API, worker, jobs and console together on an empty data/: two
+    processes can both pass create_all's existence check, and the loser must not crash."""
+    from sqlalchemy.exc import OperationalError
+
+    from amic.telemetry import store
+
+    url = f"sqlite:///{tmp_path / 'race.db'}"
+    real = store._meta.create_all
+    calls = {"n": 0}
+
+    def racing_create_all(engine, *a, **kw):
+        calls["n"] += 1
+        real(engine, *a, **kw)
+        if calls["n"] == 1:  # the other process created the table between check and CREATE
+            raise OperationalError(
+                "CREATE TABLE traces", {}, Exception("table traces already exists")
+            )
+
+    monkeypatch.setattr(store._meta, "create_all", racing_create_all)
+    tel = SqliteTelemetry(url)
+    tel.record(_trace(0, Route.SKIP, "big", 0, None))
+    assert calls["n"] == 2
+
+    def broken(engine, *a, **kw):
+        raise OperationalError("CREATE TABLE traces", {}, Exception("disk I/O error"))
+
+    monkeypatch.setattr(store._meta, "create_all", broken)
+    with pytest.raises(OperationalError):  # anything else still surfaces
+        SqliteTelemetry(f"sqlite:///{tmp_path / 'other.db'}")

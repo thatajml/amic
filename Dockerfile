@@ -1,4 +1,4 @@
-# AMIC app image: API, dashboard and terminal chat. Used by docker-compose.yml.
+# AMIC app image: API, worker, jobs, Educator Console, dashboard and terminal chat (docker-compose.yml).
 # The LLM is not inside: containers call the Ollama running on the host.
 FROM python:3.13-slim
 

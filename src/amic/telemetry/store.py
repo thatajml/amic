@@ -25,6 +25,7 @@ from sqlalchemy import (
     text,
     update,
 )
+from sqlalchemy.exc import OperationalError
 
 from amic.contracts.models import DecisionTrace, LatencySplit
 
@@ -88,8 +89,18 @@ class SqliteTelemetry:
         if url.startswith("sqlite:///") and not url.endswith(":memory:"):
             Path(url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(url)
-        _meta.create_all(self.engine)
-        self._migrate()
+        # Several processes (API, worker, jobs, console under docker compose) may open a new
+        # database at the same moment: the loser of a CREATE TABLE / ADD COLUMN race sees
+        # "already exists" / "duplicate column", re-checks, and finds the schema done.
+        for attempt in range(3):
+            try:
+                _meta.create_all(self.engine)
+                self._migrate()
+                break
+            except OperationalError as e:
+                msg = str(e).lower()
+                if attempt == 2 or not ("already exists" in msg or "duplicate column" in msg):
+                    raise
 
     def _migrate(self) -> None:
         """ALTER in every column the table defines but an older database lacks.
