@@ -16,3 +16,7 @@ models:
     input_per_mtok: 0.05
     output_per_mtok: 0.05
     placeholder: true
+  qwen3:8b:
+    input_per_mtok: 0.10
+    output_per_mtok: 0.10
+    placeholder: true

@@ -146,7 +146,7 @@ class ModelConfig(BaseModel):
     tutor: str = "llama3.1:8b"
     # Extra tutor models a request may select (ChatRequest.model). The default tutor is always
     # allowed. Each must be served by the same Ollama host (`ollama pull <name>`).
-    available: list[str] = Field(default_factory=list)
+    available: list[str] = Field(default_factory=lambda: ["qwen3:8b"])
     # Tier 2 and the LLM verifier. The brief asks for a small model (llama3.2:3b), but on the
     # 8 GB dev GPU Ollama cannot keep it resident next to the 8B tutor (measured 2026-11-23:
     # 5.28 GB + 2.21 GB, one is evicted per load), so every Tier-2 call would pay a model swap

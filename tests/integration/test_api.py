@@ -51,7 +51,10 @@ def test_bad_request(comps):
 
 def test_unknown_model_is_a_400_and_health_lists_models(comps):
     with TestClient(create_app(comps)) as client:
-        assert client.get("/health").json()["models"] == [comps.llm.model]
+        assert client.get("/health").json()["models"] == [
+            comps.llm.model,
+            *comps.settings.models.available,
+        ]
         r = client.post(
             "/chat",
             json={
