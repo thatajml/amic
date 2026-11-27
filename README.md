@@ -217,6 +217,20 @@ python -m amic.demo --script               # cold start → SKIP, general questi
 python -m amic.demo --learner edu-001      # interactive, with a decision panel per turn
 ```
 
+### Chat UI: any LLM with AMIC
+
+```bash
+streamlit run ui/chat.py
+```
+
+Pick the tutor model (a local Ollama model, or any OpenAI-compatible API: Gemini, OpenAI,
+OpenRouter, Groq, LM Studio/vLLM or a custom URL), a learner (a seeded one, or a new learner with no
+memory), the arm (`amic` / `always` / `never`) and λ. Every answer shows the route, which tier
+decided, p against the threshold band, the rationale, the strongest signals, the retrieved memory,
+the latency split and tokens; the sidebar keeps session totals. API keys are read from `.env` or
+pasted for the session only, never stored. Long-term memory is read-only unless you turn writes on,
+so chatting cannot change the seeded memory the experiments use.
+
 ## Reproducing the results
 
 Each step is resumable; LLM-judge steps sleep through Gemini daily-quota resets with
@@ -327,11 +341,10 @@ docs/             brief, plan, generated results
 
 - `main`: the system, experiments and results.
 - Paper artefacts (data, answers, judgments, models): GitHub releases `artifacts-2026-11-23*`.
-- `ui-chat`: a Streamlit chat UI to run any LLM (local Ollama or any OpenAI-compatible API) with
-  AMIC and inspect each decision. Not merged yet.
-- `dashboard-and-startup-command`: usage/cost dashboard and a one-command startup.
-- `full-stack-docker`: `main` merged with `dashboard-and-startup-command`, plus the worker,
-  Educator Console and jobs services in docker-compose. Not merged into `main` yet.
+- Chat UI (`ui/chat.py`, `src/amic/chatui.py`): a Streamlit chat to run any LLM (local Ollama or any
+  OpenAI-compatible API) with AMIC and inspect each decision. Merged into `main`.
+- Usage/cost dashboard, one-command startup and the full docker-compose stack (worker, Educator
+  Console, jobs): merged into `main`.
 
 ## Ownership
 
