@@ -87,24 +87,28 @@ Largest standardized LogReg coefficients: `s4_concept_hits` -0.62, `s2_m0_turns`
 
 Milliseconds. `gate` = signals + Tier 0 + Tier 1 (excludes the query embedding, which `always` pays too). Tutor calls are served from a prompt-keyed cache when an identical prompt+seed was already generated; cached entries keep their first-run prefill/decode timings, and `total` adds those back in place of the ~0 ms cache lookup.
 
-| arm            |   n | retrieval_rate   |   prompt_tokens |   memory_tokens |   embed_p50 |   gate_p50 |   gate_p95 |   retrieval_p50 |   prefill_mean |   total_p50 |   total_p95 |   mem_tok_saved_vs_always |   mem_prefill_uncached_est |
-|:---------------|----:|:-----------------|----------------:|----------------:|------------:|-----------:|-----------:|----------------:|---------------:|------------:|------------:|--------------------------:|---------------------------:|
-| always         | 483 | 100.0%           |           906.8 |           800   |         7.8 |        0   |        0   |             3.1 |           70.4 |      2691.7 |      5409.7 |                       0   |                      238.9 |
-| always_deep2   | 483 | 100.0%           |           901   |           793.7 |         8.9 |        0   |        0   |           172   |          211.4 |      3054   |      5763.1 |                       6.3 |                      237.1 |
-| always_m2      | 483 | 100.0%           |           204.6 |            68.8 |        11   |        0   |        0   |             4   |           37   |      2731.6 |      4427.4 |                     731.1 |                       20.6 |
-| always_m3      | 483 | 100.0%           |           333.1 |           212.3 |         8   |        0   |        0   |             4   |           54.7 |      2776.8 |      5056   |                     587.7 |                       63.4 |
-| always_shallow | 483 | 100.0%           |           437.5 |           314   |         5.9 |        0   |        0   |             2.5 |           64.9 |      2556   |      4580   |                     486   |                       93.8 |
-| amic           | 483 | 92.5%            |           489.7 |           368.7 |         6.8 |        2.1 |        3.3 |             2.7 |           61.1 |      2584.4 |      4539.1 |                     431.3 |                      110.1 |
-| amic_esc       | 483 | 93.2%            |           492.1 |           370.3 |         7.9 |        2.8 |        3.4 |             2.9 |           61.1 |      2602.6 |      4665.1 |                     429.7 |                      110.6 |
-| amic_full      | 483 | 91.9%            |           490.8 |           370.2 |         6   |        2   |      249.8 |             2.8 |           61.4 |      2578.8 |      4523.2 |                     429.8 |                      110.6 |
-| amic_lam1      | 483 | 60.9%            |           389.2 |           268.7 |         8.3 |        3   |        3.4 |             2.4 |           49   |      2588.8 |      4359   |                     531.3 |                       80.2 |
-| amic_lam1_esc  | 483 | 67.9%            |           419.1 |           289.8 |         8.1 |        2.3 |        3.4 |             2.8 |           49   |      2711.5 |      5430.1 |                     510.2 |                       86.5 |
-| amic_no_s3     | 483 | 91.9%            |           489.8 |           369.1 |         5.6 |        1.7 |        2.1 |             2.3 |           60   |      2579.1 |      4490.8 |                     430.9 |                      110.2 |
-| amic_v2        | 483 | 92.8%            |           331.1 |           199.6 |         8.5 |        3.1 |      288.4 |             4.2 |           61.9 |      2748.8 |      4927.9 |                     600.3 |                       59.6 |
-| amic_v3        | 483 | 92.8%            |           412.6 |           292.6 |         7.9 |        2.8 |      281.2 |             4.2 |           79.9 |      2821.7 |      5161.5 |                     507.4 |                       87.4 |
-| never          | 483 | 0.0%             |           125.6 |             0   |         0   |        0   |        0   |             0   |           28.2 |      2717.9 |      4480.2 |                     800   |                        0   |
-| never_esc      | 483 | 25.9%            |           237.6 |            80.6 |         0   |        0   |        0   |             0   |           28.2 |      3236   |      6220.7 |                     719.3 |                       24.1 |
-| oracle         | 483 | 55.9%            |           359.8 |           239   |         6.6 |        0   |        0   |             2.3 |           47.8 |      2571.6 |      4353.5 |                     561   |                       71.4 |
+| arm             |   n | retrieval_rate   |   prompt_tokens |   memory_tokens |   embed_p50 |   gate_p50 |   gate_p95 |   retrieval_p50 |   prefill_mean |   total_p50 |   total_p95 |   mem_tok_saved_vs_always |   mem_prefill_uncached_est |
+|:----------------|----:|:-----------------|----------------:|----------------:|------------:|-----------:|-----------:|----------------:|---------------:|------------:|------------:|--------------------------:|---------------------------:|
+| always          | 483 | 100.0%           |           906.8 |           800   |         7.8 |        0   |        0   |             3.1 |           70.4 |      2691.7 |      5409.7 |                       0   |                      238.9 |
+| always_deep2    | 483 | 100.0%           |           901   |           793.7 |         8.9 |        0   |        0   |           172   |          211.4 |      3054   |      5763.1 |                       6.3 |                      237.1 |
+| always_deepseek | 161 | 100.0%           |           929.5 |           800   |         7.6 |        0   |        0   |             3.2 |          218.3 |      5796   |      6061.4 |                       0   |                      238.9 |
+| always_m2       | 483 | 100.0%           |           204.6 |            68.8 |        11   |        0   |        0   |             4   |           37   |      2731.6 |      4427.4 |                     731.1 |                       20.6 |
+| always_m3       | 483 | 100.0%           |           333.1 |           212.3 |         8   |        0   |        0   |             4   |           54.7 |      2776.8 |      5056   |                     587.7 |                       63.4 |
+| always_qwen3    | 161 | 100.0%           |           948.1 |           800   |         7.4 |        0   |        0   |             3.3 |          113.2 |      2962.1 |      4566.4 |                       0   |                      238.9 |
+| always_shallow  | 483 | 100.0%           |           437.5 |           314   |         5.9 |        0   |        0   |             2.5 |           64.9 |      2556   |      4580   |                     486   |                       93.8 |
+| amic            | 483 | 92.5%            |           489.7 |           368.7 |         6.8 |        2.1 |        3.3 |             2.7 |           61.1 |      2584.4 |      4539.1 |                     431.3 |                      110.1 |
+| amic_deepseek   | 161 | 92.5%            |           494.2 |           368.7 |         8.3 |        2.2 |        3.3 |             3.1 |           67.4 |      5707.9 |      5836.8 |                     431.3 |                      110.1 |
+| amic_esc        | 483 | 93.2%            |           492.1 |           370.3 |         7.9 |        2.8 |        3.4 |             2.9 |           61.1 |      2602.6 |      4665.1 |                     429.7 |                      110.6 |
+| amic_full       | 483 | 91.9%            |           490.8 |           370.2 |         6   |        2   |      249.8 |             2.8 |           61.4 |      2578.8 |      4523.2 |                     429.8 |                      110.6 |
+| amic_lam1       | 483 | 60.9%            |           389.2 |           268.7 |         8.3 |        3   |        3.4 |             2.4 |           49   |      2588.8 |      4359   |                     531.3 |                       80.2 |
+| amic_lam1_esc   | 483 | 67.9%            |           419.1 |           289.8 |         8.1 |        2.3 |        3.4 |             2.8 |           49   |      2711.5 |      5430.1 |                     510.2 |                       86.5 |
+| amic_no_s3      | 483 | 91.9%            |           489.8 |           369.1 |         5.6 |        1.7 |        2.1 |             2.3 |           60   |      2579.1 |      4490.8 |                     430.9 |                      110.2 |
+| amic_qwen3      | 161 | 92.5%            |           512.9 |           368.7 |         7.2 |        2.1 |        3.3 |             2.8 |          110.1 |      2800   |      3872.7 |                     431.3 |                      110.1 |
+| amic_v2         | 483 | 92.8%            |           331.1 |           199.6 |         8.5 |        3.1 |      288.4 |             4.2 |           61.9 |      2748.8 |      4927.9 |                     600.3 |                       59.6 |
+| amic_v3         | 483 | 92.8%            |           412.6 |           292.6 |         7.9 |        2.8 |      281.2 |             4.2 |           79.9 |      2821.7 |      5161.5 |                     507.4 |                       87.4 |
+| never           | 483 | 0.0%             |           125.6 |             0   |         0   |        0   |        0   |             0   |           28.2 |      2717.9 |      4480.2 |                     800   |                        0   |
+| never_esc       | 483 | 25.9%            |           237.6 |            80.6 |         0   |        0   |        0   |             0   |           28.2 |      3236   |      6220.7 |                     719.3 |                       24.1 |
+| oracle          | 483 | 55.9%            |           359.8 |           239   |         6.6 |        0   |        0   |             2.3 |           47.8 |      2571.6 |      4353.5 |                     561   |                       71.4 |
 
 **Prefill caveat.** Measured prefill is nearly flat across arms (the `always` arm sends ~6x the prompt tokens of `never` at similar prefill) because Ollama reuses cached prompt prefixes: each synthetic learner has only a handful of history records, so DEEP retrieval returns an almost identical memory block on every query from that learner. Real deployments with larger, more varied memories would cache less. `mem_prefill_uncached_est` = memory tokens x 0.299 ms/token, the uncached prefill rate measured by the Day-1 probe (nonce-first prompts, `runs/probe.json`). Token counts are unaffected by caching and are the primary efficiency metric.
 
@@ -134,6 +138,29 @@ C_emb cancels (both arms embed the query once; plan R1). Every overhead term is 
 | RHS uncached estimate: store + tokens x rate (ms)       | 129.427  |
 
 **`amic`: measured: 2.134 ms overhead vs 10.0 ms saved (holds); uncached estimate: 129.4 ms saved (holds).** End-to-end p50 total 2584 ms vs always 2692 ms; mean prompt tokens 490 vs 907.
+
+### amic_deepseek
+
+| term                                                    |    value |
+|:--------------------------------------------------------|---------:|
+| C_feat (signals, excl. embedding)                       |   0.3661 |
+| C_T0                                                    |   0.0067 |
+| P(T1)                                                   |   0.8199 |
+| C_T1 (when fired)                                       |   2.1444 |
+| P(T2) x C_T2 (Tier-2 ms per query)                      |   0      |
+| decision-cache ms per query                             |   0      |
+| verify ms per query (P(SKIP) x C_ver)                   |   0      |
+| P(esc)                                                  |   0      |
+| P(esc) x (C_ret + C_gen) (escalation ms per query)      |   0      |
+| r (retrieval rate, escalations included)                |   0.9255 |
+| memory tokens saved / query (vs always)                 | 431.311  |
+| store ms saved / query                                  |   0.1718 |
+| prefill ms saved / query (measured, prompt-cached)      |   2.9939 |
+| LHS: gate + verify + escalation overhead per query (ms) |   2.131  |
+| RHS measured: store + prefill saved (ms)                |   3.1657 |
+| RHS uncached estimate: store + tokens x rate (ms)       | 128.992  |
+
+**`amic_deepseek`: measured: 2.131 ms overhead vs 3.2 ms saved (holds); uncached estimate: 129.0 ms saved (holds).** End-to-end p50 total 5708 ms vs always 2692 ms; mean prompt tokens 494 vs 907.
 
 ### amic_esc
 
@@ -249,6 +276,29 @@ C_emb cancels (both arms embed the query once; plan R1). Every overhead term is 
 | RHS uncached estimate: store + tokens x rate (ms)       | 129.646  |
 
 **`amic_no_s3`: measured: 1.564 ms overhead vs 11.4 ms saved (holds); uncached estimate: 129.6 ms saved (holds).** End-to-end p50 total 2579 ms vs always 2692 ms; mean prompt tokens 490 vs 907.
+
+### amic_qwen3
+
+| term                                                    |    value |
+|:--------------------------------------------------------|---------:|
+| C_feat (signals, excl. embedding)                       |   0.3593 |
+| C_T0                                                    |   0.0049 |
+| P(T1)                                                   |   0.8199 |
+| C_T1 (when fired)                                       |   2.068  |
+| P(T2) x C_T2 (Tier-2 ms per query)                      |   0      |
+| decision-cache ms per query                             |   0      |
+| verify ms per query (P(SKIP) x C_ver)                   |   0      |
+| P(esc)                                                  |   0      |
+| P(esc) x (C_ret + C_gen) (escalation ms per query)      |   0      |
+| r (retrieval rate, escalations included)                |   0.9255 |
+| memory tokens saved / query (vs always)                 | 431.311  |
+| store ms saved / query                                  |   0.4163 |
+| prefill ms saved / query (measured, prompt-cached)      | -39.7083 |
+| LHS: gate + verify + escalation overhead per query (ms) |   2.0597 |
+| RHS measured: store + prefill saved (ms)                | -39.292  |
+| RHS uncached estimate: store + tokens x rate (ms)       | 129.237  |
+
+**`amic_qwen3`: measured: 2.060 ms overhead vs -39.3 ms saved (does NOT hold); uncached estimate: 129.2 ms saved (holds).** End-to-end p50 total 2800 ms vs always 2692 ms; mean prompt tokens 513 vs 907.
 
 ### amic_v2
 
@@ -408,24 +458,28 @@ Mean ± sd across tutor sampling seeds (T = 0.7). Identical answers count as tie
 
 `net_win_vs_always` = pairwise win rate minus loss rate against `always` (DEEP every turn); 0 = as good as `always`. A run is better than another only if it uses fewer memory tokens **and** has a higher net win rate.
 
-| run            | retrieval_rate   |   memory_tokens | tokens_saved_vs_always   | net_win_vs_always   | net_win_95ci_learner   |
-|:---------------|:-----------------|----------------:|:-------------------------|:--------------------|:-----------------------|
-| always         | 100.0%           |             800 | 0.0%                     | 0.0%                |                        |
-| always_deep2   | 100.0%           |             794 | 0.8%                     | -1.2%               | [-9.0%, +6.6%]         |
-| amic_esc       | 93.2%            |             370 | 53.7%                    | -6.6%               | [-14.6%, +1.5%]        |
-| amic_full      | 91.9%            |             370 | 53.7%                    | -6.8%               | [-14.4%, +0.8%]        |
-| amic_no_s3     | 91.9%            |             369 | 53.9%                    | -7.7%               | [-12.3%, -2.5%]        |
-| amic           | 92.5%            |             369 | 53.9%                    | -6.8%               | [-14.6%, +1.2%]        |
-| always_shallow | 100.0%           |             314 | 60.7%                    | -4.3%               | [-11.7%, +3.1%]        |
-| amic_v3        | 92.8%            |             293 | 63.4%                    | -30.4%              | [-39.8%, -20.2%]       |
-| amic_lam1_esc  | 67.9%            |             290 | 63.8%                    | -15.1%              | [-21.3%, -9.4%]        |
-| amic_lam1      | 60.9%            |             269 | 66.4%                    | -19.5%              | [-26.3%, -12.7%]       |
-| oracle         | 55.9%            |             239 | 70.1%                    | -18.4%              | [-28.5%, -8.9%]        |
-| always_m3      | 100.0%           |             212 | 73.5%                    | -39.3%              | [-46.4%, -32.1%]       |
-| amic_v2        | 92.8%            |             200 | 75.0%                    | -30.0%              | [-36.4%, -22.9%]       |
-| never_esc      | 25.9%            |              81 | 89.9%                    | -44.1%              | [-54.2%, -34.6%]       |
-| always_m2      | 100.0%           |              69 | 91.4%                    | -40.4%              | [-46.6%, -33.8%]       |
-| never          | 0.0%             |               0 | 100.0%                   | -62.9%              | [-67.5%, -58.0%]       |
+| run             | retrieval_rate   |   memory_tokens | tokens_saved_vs_always   | net_win_vs_always   | net_win_95ci_learner   |
+|:----------------|:-----------------|----------------:|:-------------------------|:--------------------|:-----------------------|
+| always          | 100.0%           |             800 | 0.0%                     | 0.0%                |                        |
+| always_deepseek | 100.0%           |             800 | 0.0%                     |                     |                        |
+| always_qwen3    | 100.0%           |             800 | 0.0%                     |                     |                        |
+| always_deep2    | 100.0%           |             794 | 0.8%                     | -1.2%               | [-9.0%, +6.6%]         |
+| amic_esc        | 93.2%            |             370 | 53.7%                    | -6.6%               | [-14.6%, +1.5%]        |
+| amic_full       | 91.9%            |             370 | 53.7%                    | -6.8%               | [-14.4%, +0.8%]        |
+| amic_no_s3      | 91.9%            |             369 | 53.9%                    | -7.7%               | [-12.3%, -2.5%]        |
+| amic_deepseek   | 92.5%            |             369 | 53.9%                    |                     |                        |
+| amic_qwen3      | 92.5%            |             369 | 53.9%                    |                     |                        |
+| amic            | 92.5%            |             369 | 53.9%                    | -6.8%               | [-14.6%, +1.2%]        |
+| always_shallow  | 100.0%           |             314 | 60.7%                    | -4.3%               | [-11.7%, +3.1%]        |
+| amic_v3         | 92.8%            |             293 | 63.4%                    | -30.4%              | [-39.8%, -20.2%]       |
+| amic_lam1_esc   | 67.9%            |             290 | 63.8%                    | -15.1%              | [-21.3%, -9.4%]        |
+| amic_lam1       | 60.9%            |             269 | 66.4%                    | -19.5%              | [-26.3%, -12.7%]       |
+| oracle          | 55.9%            |             239 | 70.1%                    | -18.4%              | [-28.5%, -8.9%]        |
+| always_m3       | 100.0%           |             212 | 73.5%                    | -39.3%              | [-46.4%, -32.1%]       |
+| amic_v2         | 92.8%            |             200 | 75.0%                    | -30.0%              | [-36.4%, -22.9%]       |
+| never_esc       | 25.9%            |              81 | 89.9%                    | -44.1%              | [-54.2%, -34.6%]       |
+| always_m2       | 100.0%           |              69 | 91.4%                    | -40.4%              | [-46.6%, -33.8%]       |
+| never           | 0.0%             |               0 | 100.0%                   | -62.9%              | [-67.5%, -58.0%]       |
 
 ## 9. Verify-and-escalate (extension; pre-registered E1-E4)
 

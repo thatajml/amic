@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 from amic.generation.gateway.base import LLMResult, Message
+
+_THINK = re.compile(r"<think>.*?</think>\s*", re.S)
+_REASONERS = ("deepseek-r1", "qwen3")
 
 
 class OllamaGateway:
@@ -24,6 +28,9 @@ class OllamaGateway:
         import ollama
 
         self.model = model
+        # Reasoning models spend the token cap on hidden thinking: turn it off so answers are
+        # comparable with the non-reasoning tutor.
+        self._no_think = model.startswith(_REASONERS)
         kw = {"timeout": timeout_s} if timeout_s is not None else {}
         self._client = ollama.Client(host=base_url, **kw)
         self._defaults: dict[str, float | int] = {
@@ -52,16 +59,18 @@ class OllamaGateway:
         if seed is not None:
             opts["seed"] = seed
         t = time.perf_counter()
+        extra = {"think": False} if self._no_think else {}
         r = self._client.chat(
             model=self.model,
             messages=messages,
             options=opts,
             format="json" if json_mode else None,
             keep_alive=self._keep_alive,
+            **extra,
         )
         wall = (time.perf_counter() - t) * 1000
         return LLMResult(
-            text=r["message"]["content"],
+            text=_THINK.sub("", r["message"]["content"]).strip() if self._no_think else r["message"]["content"],
             prompt_tokens=int(r.get("prompt_eval_count") or 0),
             completion_tokens=int(r.get("eval_count") or 0),
             total_ms=wall,
