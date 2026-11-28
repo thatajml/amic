@@ -10,6 +10,7 @@ from chat_common import (
     EDUCATOR_URL,
     app_settings,
     get_stack,
+    users_collection,
 )
 
 from amic.chatui import (
@@ -17,7 +18,6 @@ from amic.chatui import (
     OLLAMA,
     PRESETS,
     PROVIDERS,
-    USERS_COLLECTION,
     decision_summary,
     find_trace,
     list_ollama_models,
@@ -121,7 +121,7 @@ if st.session_state.get("who") != who:
     st.session_state.sid = uuid.uuid4().hex[:8]
     st.session_state.newcomer = f"ui-guest-{uuid.uuid4().hex[:6]}"
 learner = who[1] or st.session_state.newcomer
-collection = USERS_COLLECTION if user else "edu_v1"
+collection = users_collection() if user else "edu_v1"
 write = True if user else write  # accounts always save; guests never do
 
 # ----------------------------------------------------------------------------------- main

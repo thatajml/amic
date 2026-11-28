@@ -7,7 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from amic.chatui import UserRegistry, make_gateway
+from amic.chatui import USERS_COLLECTION, UserRegistry, make_gateway
 
 DASHBOARD_URL = os.environ.get("AMIC_DASHBOARD_URL", "http://localhost:8501")
 EDUCATOR_URL = os.environ.get("AMIC_EDUCATOR_URL", "http://localhost:8502")
@@ -18,6 +18,15 @@ def app_settings():  # noqa: ANN201
     from amic.contracts.config import load_settings
 
     return load_settings(None)
+
+
+def users_collection() -> str:
+    """Where accounts' memory lives. Locally: their own `amic_users` collection, apart from the
+    frozen `edu_v1`. Against a shared Chroma server (Docker) the worker and the Educator Console
+    read the stack's collection, so accounts must use that one or the worker's writes would never
+    be read back; `edu_v1` is not on that server, so nothing seeded can be touched."""
+    s = app_settings()
+    return s.chroma_collection if s.chroma_client == "http" else USERS_COLLECTION
 
 
 @st.cache_resource(show_spinner="Loading the embedding model...")
