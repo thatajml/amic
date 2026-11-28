@@ -34,5 +34,5 @@ COPY scripts ./scripts
 COPY configs ./configs
 RUN pip install --no-deps .
 
-EXPOSE 8080 8501
+EXPOSE 8080 8501 8502 8503
 CMD ["uvicorn", "amic.service.api:app", "--host", "0.0.0.0", "--port", "8080"]

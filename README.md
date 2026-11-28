@@ -146,7 +146,8 @@ variables:
   read the same settings as a local run.
 
 ```bat
-docker compose up -d                 :: build once, then start everything below
+up-amic.cmd                          :: start everything below AND open chat, dashboard and Educator
+docker compose up -d                 :: build once, then start everything below (no browser)
 docker compose run --rm chat         :: terminal chat (same options as chat-amic.cmd, e.g. --frozen)
 docker compose logs -f worker jobs   :: what the background services are doing
 docker compose down                  :: stop everything
@@ -160,6 +161,7 @@ docker compose up -d --build         :: rebuild after changing code
 | `educator` | Educator Console on http://localhost:8502: a learner's memory and gate decisions, plus close-fact, add-note, correct-mastery and erase |
 | `jobs` | Nightly jobs, once at start and then every 24 h: Tier-1 retrain with a promotion gate, band recalibration, forgetting. Results go to `data/jobs.jsonl` |
 | `dashboard` | Usage and savings dashboard on http://localhost:8501 |
+| `chat-ui` | Chat UI on http://localhost:8503: login page, then the tutor chat. Accounts' memory and profiles use the shared stack, so they show up in the Educator Console. The seeded `edu-*` learners are not offered here (they live in the local `data/chroma`) |
 | `redis`, `chroma` | Shared stores: sessions, memory version, M3 profiles and the write queue in Redis; M1 and M2 in the Chroma server |
 
 The API, worker, console and jobs are separate processes. So under Docker, memory lives in the
@@ -229,6 +231,12 @@ memory), the arm (`amic` / `always` / `never`) and λ. Every answer shows the ro
 decided, p against the threshold band, the rationale, the strongest signals, the retrieved memory,
 the latency split and tokens; the sidebar keeps session totals. API keys are read from `.env` or
 pasted for the session only, never stored.
+
+**Pages.** `streamlit run ui/chat.py` opens a login page first (Sign in, Create account, Continue
+as guest). After login the chat page has links to the dashboard and the Educator Console in the
+sidebar. In Docker the chat UI is the `chat-ui` service on http://localhost:8503, and
+`up-amic.cmd` starts the stack and opens it together with the dashboard and the Educator Console
+(`docker compose up -d` alone cannot open a browser; add `-Build` after code changes).
 
 **Accounts.** Create an account with a name and a PIN (4+ characters) and sign in again later with
 the same pair. Every turn is saved to your own long-term memory and your M3 learner profile (your

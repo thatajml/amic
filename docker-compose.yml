@@ -1,11 +1,13 @@
 # The whole AMIC stack in one command:   docker compose up -d
 #   API        http://localhost:8080   (docs at /docs)
+#   Chat UI    http://localhost:8503   (login page, then the tutor chat; accounts + profiles)
 #   Dashboard  http://localhost:8501
 #   Educator   http://localhost:8502   (Educator Console: memory, decisions, data rights)
 #   Background worker (consolidates each turn into memory) and jobs (nightly retrain,
 #              recalibrate, forget); logs: docker compose logs -f worker jobs
 #   Chat       docker compose run --rm chat [--learner me] [--frozen]
 #   Stop       docker compose down
+#   Open it all  up-amic.cmd  (starts this stack, then opens the chat UI, dashboard and Educator)
 #
 # Requirement: Ollama running on the host (the Windows app) with the models pulled
 # (`ollama pull llama3.1:8b`). Containers reach it at host.docker.internal:11434.
@@ -65,6 +67,23 @@ services:
       interval: 15s
       timeout: 5s
       start_period: 30s
+      retries: 3
+
+  # Chat UI (login page + tutor chat). Shares the stack with everything else: accounts' turns go
+  # through the Redis write queue to the worker, their profiles are visible in the Educator
+  # Console. The seeded edu-* learners live in the local data/chroma, so they are not offered here.
+  chat-ui:
+    <<: *app
+    command: ["streamlit", "run", "ui/chat.py", "--server.port", "8503",
+              "--server.address", "0.0.0.0", "--server.headless", "true",
+              "--browser.gatherUsageStats", "false"]
+    ports: ["127.0.0.1:8503:8503"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8503/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 40s
       retries: 3
 
   # Terminal chat, on demand only: docker compose run --rm chat
