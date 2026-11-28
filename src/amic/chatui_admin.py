@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--pin", help="new PIN (prompted for when omitted)")
     ap.add_argument("--db", default=os.environ.get("AMIC_CHAT_USERS_DB", "data/chat_users.sqlite"))
     a = ap.parse_args(argv)
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]  # names are Unicode
     reg = UserRegistry(a.db)
     if a.cmd == "list":
         for uid, name, created in reg.list_users():
