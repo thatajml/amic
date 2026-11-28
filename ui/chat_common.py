@@ -7,7 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from amic.chatui import USERS_COLLECTION, UserRegistry, make_gateway
+from amic.chatui import USERS_COLLECTION, TeeTelemetry, UserRegistry, make_gateway
 
 DASHBOARD_URL = os.environ.get("AMIC_DASHBOARD_URL", "http://localhost:8501")
 EDUCATOR_URL = os.environ.get("AMIC_EDUCATOR_URL", "http://localhost:8502")
@@ -49,9 +49,16 @@ def get_stack(
 ):  # noqa: ANN201
     from amic.app import build_arm, build_components
     from amic.contracts.config import load_settings
-    from amic.telemetry.store import InMemoryTelemetry
+    from amic.telemetry.store import InMemoryTelemetry, SqliteTelemetry
 
-    s = load_settings(None, chroma_collection=collection, gate={"lam": lam})
+    # shadow baseline on: it measures the memory tokens the always-retrieve plan would have used,
+    # which is what the dashboard's "saved" figures are computed from
+    s = load_settings(
+        None,
+        chroma_collection=collection,
+        gate={"lam": lam},
+        telemetry={"shadow_baseline": True},
+    )
     llm = make_gateway(
         provider,
         model,
@@ -61,7 +68,9 @@ def get_stack(
         temperature=temperature,
         max_tokens=s.models.max_answer_tokens,
     )
-    tel = InMemoryTelemetry()
+    # every trace also goes to the store the dashboard reads (data/metrics.db), so chat traffic
+    # shows up there live; the in-memory copy feeds this page's decision panel
+    tel = TeeTelemetry(InMemoryTelemetry(), SqliteTelemetry(s.metrics_db_url))
     comps = build_components(
         s,
         embedder=get_embedder(s.models.embedding, s.models.embedding_device),
@@ -70,6 +79,23 @@ def get_stack(
     )
     arms = {name: build_arm(name, comps) for name in ("amic", "always", "never")}  # type: ignore[arg-type]
     return comps, arms, tel
+
+
+def stack_problem() -> str | None:
+    """None when the memory services answer, else a one-line reason (cheap, short timeouts)."""
+    s = app_settings()
+    try:
+        if s.session_backend == "redis":
+            import redis
+
+            redis.Redis.from_url(s.redis_url, socket_connect_timeout=2, socket_timeout=2).ping()
+        if s.chroma_client == "http":
+            import httpx
+
+            httpx.get(f"http://{s.chroma_host}:{s.chroma_port}/api/v2/heartbeat", timeout=2.0)
+    except Exception as e:  # noqa: BLE001
+        return f"{type(e).__name__}: {str(e)[:120]}"
+    return None
 
 
 @st.cache_resource

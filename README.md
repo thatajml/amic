@@ -233,16 +233,22 @@ the latency split and tokens; the sidebar keeps session totals. API keys are rea
 pasted for the session only, never stored.
 
 **Pages.** `streamlit run ui/chat.py` opens a login page first (Sign in, Create account, Continue
-as guest). After login the chat page has links to the dashboard and the Educator Console in the
-sidebar. In Docker the chat UI is the `chat-ui` service on http://localhost:8503, and
-`up-amic.cmd` starts the stack and opens it together with the dashboard and the Educator Console
-(`docker compose up -d` alone cannot open a browser; add `-Build` after code changes).
+as guest). The login page also has the **Staff** links to the dashboard and the Educator Console;
+the chat page deliberately does not, so a signed-in student is not pointed at them. Those two
+pages have no login of their own (their ports are bound to localhost), so the links are a
+convenience, not access control. In Docker the chat UI is the `chat-ui` service on
+http://localhost:8503, and `up-amic.cmd` starts the stack and opens it together with the dashboard
+and the Educator Console (`docker compose up -d` alone cannot open a browser; add `-Build` after
+code changes). Every chat turn is also written to `data/metrics.db`, so the dashboard shows chat
+traffic live (tokens, and the memory tokens saved against always-retrieve).
 
 **Accounts.** Create an account with a name and a PIN (4+ characters) and sign in again later with
 the same pair. Every turn is saved to your own long-term memory and your M3 learner profile (your
 name, goals, concepts you struggle with) is created at sign-up, so the tutor remembers you across
-sessions. Accounts live in `data/chat_users.sqlite` (PIN stored only as a salted scrypt hash; there
-is no recovery, a forgotten PIN means a new account). Account memory goes to its own Chroma
+sessions. Accounts live in `data/chat_users.sqlite` (PIN stored only as a salted scrypt hash; the
+form asks for the PIN twice). A forgotten PIN is reset by staff, keeping the learner's memory:
+`python -m amic.chatui_admin reset-pin "Name"` (and `list` to see accounts; in Docker run it with
+`docker compose exec chat-ui python -m amic.chatui_admin ...`). Account memory goes to its own Chroma
 collection `amic_users`, never to the seeded `edu_v1`. **Guest** keeps nothing. **Seeded learner**
 (`edu-*`) is read-only unless you turn writes on, so chatting cannot change the memory the
 experiments use. While the model answers, the chat shows a shimmering "thinking" indicator.

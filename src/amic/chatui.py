@@ -202,6 +202,30 @@ class UserRegistry:
         ok = hmac.compare_digest(_hash_pin(pin, salt), row[3] if row else bytes(64))
         return (row[0], row[1]) if row and ok else None
 
+    def set_pin(self, name: str, pin: str) -> str:
+        """Staff reset: give an existing account a new PIN. The learner id (and so the memory and
+        profile) is kept. Returns the display name; ValueError for an unknown name or short PIN."""
+        if len(pin) < MIN_PIN:
+            raise ValueError(f"The PIN needs at least {MIN_PIN} characters.")
+        salt = secrets.token_bytes(16)
+        with self._db:
+            cur = self._db.execute(
+                "UPDATE users SET pin_salt = ?, pin_hash = ? WHERE name_key = ?",
+                (salt, _hash_pin(pin, salt), " ".join(name.split()).casefold()),
+            )
+        if cur.rowcount == 0:
+            raise ValueError(f"No account named {name!r}.")
+        return self._db.execute(
+            "SELECT display_name FROM users WHERE name_key = ?",
+            (" ".join(name.split()).casefold(),),
+        ).fetchone()[0]
+
+    def list_users(self) -> list[tuple[str, str, float]]:
+        """(learner id, display name, created) of every account, oldest first."""
+        return list(
+            self._db.execute("SELECT user_id, display_name, created FROM users ORDER BY created")
+        )
+
 
 def save_name_to_profile(profiles: Any, user_id: str, name: str) -> None:
     """Create the learner's M3 profile with their name, so it exists before the first turn."""
@@ -212,3 +236,25 @@ def save_name_to_profile(profiles: Any, user_id: str, name: str) -> None:
         raise TypeError("profile store returned an unexpected object")
     prof.notes.setdefault("personal", {})["name"] = f"Name is {name}"
     profiles.put(prof)
+
+
+class TeeTelemetry:
+    """Telemetry for the chat UI: every trace goes to the shared store the dashboard reads AND to a
+    per-process list the decision panel reads (`find_trace`). `annotate` (the shadow baseline)
+    is forwarded to both so the dashboard sees the saved-tokens figure."""
+
+    def __init__(self, memory: Any, shared: Any) -> None:
+        self._memory = memory
+        self._shared = shared
+        self.traces = memory.traces
+
+    def record(self, trace: DecisionTrace) -> None:
+        self._memory.record(trace)
+        self._shared.record(trace)
+
+    def annotate(self, request_id: str, **fields: Any) -> None:
+        self._memory.annotate(request_id, **fields)
+        self._shared.annotate(request_id, **fields)
+
+    def fetch(self, *args: Any, **kwargs: Any) -> list[DecisionTrace]:
+        return self._shared.fetch(*args, **kwargs)  # type: ignore[no-any-return]

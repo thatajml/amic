@@ -6,8 +6,6 @@ import uuid
 
 import streamlit as st
 from chat_common import (
-    DASHBOARD_URL,
-    EDUCATOR_URL,
     app_settings,
     get_stack,
     users_collection,
@@ -65,9 +63,6 @@ with st.sidebar:
             value=False,
             help="Off keeps the seeded memory unchanged (safe for experiments).",
         )
-    c1, c2 = st.columns(2)
-    c1.link_button("Dashboard", DASHBOARD_URL, icon=":material/monitoring:", width="stretch")
-    c2.link_button("Educator", EDUCATOR_URL, icon=":material/school:", width="stretch")
 
     st.header("Tutor model")
     provider = st.selectbox("Provider", PROVIDERS)
@@ -136,7 +131,9 @@ try:
         provider, model, base_url, key_env, api_key, lam, temperature, collection
     )
 except Exception as e:  # noqa: BLE001
-    st.error(f"Could not start the tutor model: {e}")
+    st.error(f"Could not start AMIC: {e}", icon=":material/error:")
+    st.caption("If the memory services are down, start the stack with `up-amic.cmd`.")
+    st.button("Retry", icon=":material/refresh:")
     st.stop()
 
 if user and st.session_state.get("profile_saved") != user[0]:
@@ -196,13 +193,12 @@ if query:
         with st.status(f":shimmer[{model} is thinking]", type="compact") as status:
             ctx = make_context(comps, learner, f"ui-{st.session_state.sid}-{learner}", query, arm)  # type: ignore[arg-type]
             try:
-                resp, job = arms[arm].answer_deferred(ctx)
+                resp, job = arms[arm].answer_deferred(ctx, write=write and mode != "guest")
             except Exception as e:  # noqa: BLE001
                 status.update(label="Failed", state="error")
                 st.error(f"The tutor call failed: {e}")
                 st.stop()
-            if write and mode != "guest":  # guests are never written
-                job()
+            job()  # shadow baseline for the dashboard; writes memory only when allowed above
             status.update(label="Answered", state="complete")
         sm = decision_summary(resp, find_trace(tel.traces, resp))
         st.markdown(resp.answer)

@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import streamlit as st
-from chat_common import get_registry, learner_options
+from chat_common import (
+    DASHBOARD_URL,
+    EDUCATOR_URL,
+    get_registry,
+    learner_options,
+    stack_problem,
+)
 
 _, centre, _ = st.columns([1, 2, 1])
 with centre:
@@ -20,19 +26,29 @@ with centre:
             if found := get_registry().login(name, pin):
                 st.session_state.user = found
                 st.rerun()
-            st.error("Name or PIN is not right.")
+            st.error("Name or PIN is not right. If you forgot your PIN, ask staff to reset it.")
     with tab_new, st.form("create_account"):
         name = st.text_input("Choose a name", max_chars=40)
         pin = st.text_input("Choose a PIN", type="password", help="At least 4 characters.")
+        pin2 = st.text_input("Repeat the PIN", type="password")
+        st.caption("Remember your PIN: only staff can reset it.")
         if st.form_submit_button("Create account", type="primary", width="stretch"):
             try:
+                if pin != pin2:
+                    raise ValueError("The two PINs are different. Type the same PIN twice.")
                 uid = get_registry().register(name, pin)
             except ValueError as e:
                 st.error(str(e))
             else:
                 st.session_state.user = (uid, " ".join(name.split()))
                 st.rerun()
-    st.caption("There is no PIN recovery: a forgotten PIN means a new account.")
+    if problem := stack_problem():
+        st.warning(
+            "The memory services are not reachable, so chatting will fail until they are "
+            "started (`up-amic.cmd`).",
+            icon=":material/cloud_off:",
+        )
+        st.caption(problem)
     st.divider()
     if st.button("Continue as guest", width="stretch", help="Nothing is saved."):
         st.session_state.guest = True
@@ -43,3 +59,9 @@ with centre:
             if st.button("Use this learner"):
                 st.session_state.seeded = opts[label]
                 st.rerun()
+
+    st.divider()
+    st.caption("Staff")
+    s1, s2 = st.columns(2)
+    s1.link_button("Dashboard", DASHBOARD_URL, icon=":material/monitoring:", width="stretch")
+    s2.link_button("Educator Console", EDUCATOR_URL, icon=":material/school:", width="stretch")

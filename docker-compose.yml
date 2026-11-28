@@ -79,6 +79,10 @@ services:
               "--browser.gatherUsageStats", "false"]
     ports: ["127.0.0.1:8503:8503"]
     restart: unless-stopped
+    # the chat page needs the memory services, not just their containers
+    depends_on:
+      redis: {condition: service_healthy}
+      chroma: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8503/_stcore/health"]
       interval: 15s
@@ -145,6 +149,11 @@ services:
     volumes: [redis-data:/data]
     command: ["redis-server", "--appendonly", "yes"]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   chroma:
     image: chromadb/chroma:1.5.9
@@ -154,6 +163,11 @@ services:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/8000'"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
 volumes:
   redis-data:
