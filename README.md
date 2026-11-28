@@ -242,13 +242,13 @@ and the Educator Console (`docker compose up -d` alone cannot open a browser; ad
 code changes). Every chat turn is also written to `data/metrics.db`, so the dashboard shows chat
 traffic live (tokens, and the memory tokens saved against always-retrieve).
 
-**Accounts.** Create an account with a name and a PIN (4+ characters) and sign in again later with
+**Accounts.** Create an account with a name and a PIN (4+ characters, surrounding spaces ignored) and sign in again later with
 the same pair. Every turn is saved to your own long-term memory and your M3 learner profile (your
 name, goals, concepts you struggle with) is created at sign-up, so the tutor remembers you across
 sessions. Accounts live in `data/chat_users.sqlite` (PIN stored only as a salted scrypt hash; the
 form asks for the PIN twice). A forgotten PIN is reset by staff, keeping the learner's memory:
 `python -m amic.chatui_admin reset-pin "Name"` (and `list` to see accounts; in Docker run it with
-`docker compose exec chat-ui python -m amic.chatui_admin ...`). Account memory goes to its own Chroma
+`docker compose exec chat-ui python -m amic.chatui_admin ...`). After 5 wrong PINs in a row the name is locked for 5 minutes (`unlock` clears it). Names are Unicode-normalised (an accent typed two ways is the same name), invisible characters are dropped, and mixing Latin, Cyrillic and Greek letters in one name is refused to stop look-alike accounts. `/remember` and `/forget` need an account; guests get an explanation instead. Account memory goes to its own Chroma
 collection `amic_users`, never to the seeded `edu_v1`. **Guest** keeps nothing. **Seeded learner**
 (`edu-*`) is read-only unless you turn writes on, so chatting cannot change the memory the
 experiments use. While the model answers, the chat shows a shimmering "thinking" indicator.

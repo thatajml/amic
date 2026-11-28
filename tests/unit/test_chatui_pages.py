@@ -81,3 +81,49 @@ def test_staff_links_are_on_the_login_page_only(app):
     assert [b.label for b in app.get("link_button")] == ["Dashboard", "Educator Console"]
     next(b for b in app.button if b.label == "Continue as guest").click().run()
     assert not app.get("link_button")
+
+
+def _guest(app):
+    next(b for b in app.button if b.label == "Continue as guest").click().run()
+    return app
+
+
+def test_blank_message_is_not_sent(app):
+    g = _guest(app)
+    g.chat_input[0].set_value("     ").run()
+    assert not g.exception
+    assert len(g.chat_message) == 0  # nothing was sent, answered or saved
+    assert any("Type a message" in str(t.value) for t in g.toast)
+
+
+def test_guest_memory_commands_explain_instead_of_promising(app):
+    g = _guest(app)
+    g.chat_input[0].set_value("/remember I love cats").run()
+    assert not g.exception
+    texts = [m.markdown[0].value for m in g.chat_message]
+    assert "Guests cannot save memory" in texts[-1]
+    assert "Noted" not in " ".join(texts)  # the pipeline (and its false promise) was never run
+
+
+def test_name_is_shown_as_text_not_markdown(app):
+    next(t for t in app.text_input if t.label == "Choose a name").set_value("[x](http://e.example)")
+    next(t for t in app.text_input if t.label == "Choose a PIN").set_value("1234")
+    next(t for t in app.text_input if t.label == "Repeat the PIN").set_value("1234")
+    next(b for b in app.button if b.label == "Create account").click().run()
+    assert _titles(app) == [r"Hi, \[x\]\(http\://e\.example\)"]
+
+
+def test_repeated_wrong_pins_lock_the_login_page(app):
+    next(t for t in app.text_input if t.label == "Choose a name").set_value("Sam")
+    next(t for t in app.text_input if t.label == "Choose a PIN").set_value("1234")
+    next(t for t in app.text_input if t.label == "Repeat the PIN").set_value("1234")
+    next(b for b in app.button if b.label == "Create account").click().run()
+    next(b for b in app.sidebar.button if b.label == "Sign out").click().run()
+    for _ in range(5):
+        next(t for t in app.text_input if t.label == "Name").set_value("Sam")
+        next(t for t in app.text_input if t.label == "PIN").set_value("0000")
+        next(b for b in app.button if b.label == "Sign in").click().run()
+    next(t for t in app.text_input if t.label == "PIN").set_value("1234")
+    next(b for b in app.button if b.label == "Sign in").click().run()
+    assert "Too many wrong PINs" in app.error[0].value
+    assert "user" not in app.session_state

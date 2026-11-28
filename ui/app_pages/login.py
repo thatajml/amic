@@ -11,6 +11,8 @@ from chat_common import (
     stack_problem,
 )
 
+from amic.chatui import LoginLocked, normalize_name
+
 _, centre, _ = st.columns([1, 2, 1])
 with centre:
     st.title("Welcome to AMIC")
@@ -23,10 +25,18 @@ with centre:
         name = st.text_input("Name", max_chars=40)
         pin = st.text_input("PIN", type="password")
         if st.form_submit_button("Sign in", type="primary", width="stretch"):
-            if found := get_registry().login(name, pin):
-                st.session_state.user = found
-                st.rerun()
-            st.error("Name or PIN is not right. If you forgot your PIN, ask staff to reset it.")
+            try:
+                found = get_registry().login(name, pin)
+            except LoginLocked as e:
+                st.error(
+                    f"Too many wrong PINs. Try again in {(e.seconds + 59) // 60} min, "
+                    "or ask staff to unlock the account."
+                )
+            else:
+                if found:
+                    st.session_state.user = found
+                    st.rerun()
+                st.error("Name or PIN is not right. If you forgot your PIN, ask staff to reset it.")
     with tab_new, st.form("create_account"):
         name = st.text_input("Choose a name", max_chars=40)
         pin = st.text_input("Choose a PIN", type="password", help="At least 4 characters.")
@@ -34,13 +44,13 @@ with centre:
         st.caption("Remember your PIN: only staff can reset it.")
         if st.form_submit_button("Create account", type="primary", width="stretch"):
             try:
-                if pin != pin2:
+                if pin.strip() != pin2.strip():
                     raise ValueError("The two PINs are different. Type the same PIN twice.")
                 uid = get_registry().register(name, pin)
             except ValueError as e:
                 st.error(str(e))
             else:
-                st.session_state.user = (uid, " ".join(name.split()))
+                st.session_state.user = (uid, normalize_name(name))
                 st.rerun()
     if problem := stack_problem():
         st.warning(

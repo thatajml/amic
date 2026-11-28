@@ -58,6 +58,7 @@ def get_stack(
         chroma_collection=collection,
         gate={"lam": lam},
         telemetry={"shadow_baseline": True},
+        prompt_profile="tutor_chat",  # tutor prompt + "do not guess facts about the learner"
     )
     llm = make_gateway(
         provider,

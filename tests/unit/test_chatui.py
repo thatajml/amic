@@ -98,7 +98,7 @@ def test_reasoning_models_get_room_for_the_answer():
 def test_find_trace_matches_request_id():
     traces = [_trace("a"), _trace("b")]
     assert find_trace(traces, _resp(rid="a")).request_id == "a"  # type: ignore[union-attr]
-    assert find_trace(traces, _resp(rid="zzz")).request_id == "b"  # type: ignore[union-attr]
+    assert find_trace(traces, _resp(rid="zzz")) is None  # never another request's trace
     assert find_trace([], _resp()) is None
 
 

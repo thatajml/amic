@@ -70,7 +70,9 @@ class OllamaGateway:
         )
         wall = (time.perf_counter() - t) * 1000
         return LLMResult(
-            text=_THINK.sub("", r["message"]["content"]).strip() if self._no_think else r["message"]["content"],
+            text=_THINK.sub("", r["message"]["content"]).strip()
+            if self._no_think
+            else r["message"]["content"],
             prompt_tokens=int(r.get("prompt_eval_count") or 0),
             completion_tokens=int(r.get("eval_count") or 0),
             total_ms=wall,

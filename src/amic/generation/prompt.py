@@ -27,9 +27,17 @@ SYSTEM_ASSISTANT = (
     "depends on earlier conversations and is in neither the memory nor the current "
     "conversation, say that you do not know instead of guessing."
 )
+# Chat UI: the tutor prompt plus a guard against inventing facts about the learner (a model with no
+# memory otherwise makes up "your project is ..."). A separate profile so `tutor` stays
+# byte-identical for the experiments and their generation cache.
+SYSTEM_CHAT = SYSTEM + (
+    " If the student asks about themselves, their goals, projects or earlier work and neither the "
+    "memory nor the conversation says, tell them you do not know yet and ask them; never guess."
+)
 PROFILES: dict[str, tuple[str, str, bool]] = {
     # profile -> (system prompt, memory header, show the current date)
     "tutor": (SYSTEM, "Learner memory (from earlier sessions)", False),
+    "tutor_chat": (SYSTEM_CHAT, "Learner memory (from earlier sessions)", False),
     "assistant": (SYSTEM_ASSISTANT, "Memory (excerpts from earlier conversations)", True),
 }
 

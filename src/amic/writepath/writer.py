@@ -15,11 +15,13 @@ from amic.memory.embedder import Embedder
 from amic.memory.stores.episodic import EpisodicStore
 
 _MAX_ANSWER_CHARS = 400
+_MAX_QUERY_CHARS = 2000
 
 
 def record_text(query: str, answer: str) -> str:
     a = answer if len(answer) <= _MAX_ANSWER_CHARS else answer[:_MAX_ANSWER_CHARS] + "..."
-    return f"Student asked: {query}\nTutor answered: {a}"
+    q = query if len(query) <= _MAX_QUERY_CHARS else query[:_MAX_QUERY_CHARS] + "..."
+    return f"Student asked: {q}\nTutor answered: {a}"
 
 
 class MemoryWriter:

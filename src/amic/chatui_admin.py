@@ -3,6 +3,7 @@
     python -m amic.chatui_admin list
     python -m amic.chatui_admin reset-pin "Ala"            # asks for the new PIN
     python -m amic.chatui_admin reset-pin "Ala" --pin 1234
+    python -m amic.chatui_admin unlock "Ala"               # after too many wrong PINs
 
 Uses the same accounts file as the chat UI (AMIC_CHAT_USERS_DB, default data/chat_users.sqlite).
 The learner id is kept, so a learner's memory and profile stay attached after a PIN reset.
@@ -23,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="show every account")
+    ul = sub.add_parser("unlock", help="clear the wrong-PIN lock of an account")
+    ul.add_argument("name")
     rp = sub.add_parser("reset-pin", help="set a new PIN for an account")
     rp.add_argument("name")
     rp.add_argument("--pin", help="new PIN (prompted for when omitted)")
@@ -33,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "list":
         for uid, name, created in reg.list_users():
             print(f"{uid:<28} {name:<24} {datetime.fromtimestamp(created):%Y-%m-%d %H:%M}")
+        return 0
+    if a.cmd == "unlock":
+        reg.unlock(a.name)
+        print(f"Unlocked {a.name}.")
         return 0
     pin = a.pin or getpass.getpass("New PIN: ")
     try:

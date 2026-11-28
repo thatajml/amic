@@ -33,4 +33,8 @@ def acknowledgement(cmd: Command) -> str:
         )
     if cmd.op == "remember":
         return f'Noted. I will remember: "{cmd.text}".'
-    return f'Understood. I will forget what I stored about: "{cmd.text}".'
+    return (
+        f'Understood. I will look for stored memories close to "{cmd.text}" and forget the '
+        "ones that match. Only close matches are removed, so check the Educator Console if "
+        "something should be gone."
+    )

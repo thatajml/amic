@@ -205,7 +205,7 @@ class Settings(BaseSettings):
     metrics_db_url: str = "sqlite:///./data/metrics.db"
     m0_turns: int = 6
     # "tutor" (education study) or "assistant" (LongMemEval: general assistant, dated prompt)
-    prompt_profile: Literal["tutor", "assistant"] = "tutor"
+    prompt_profile: Literal["tutor", "tutor_chat", "assistant"] = "tutor"
 
     def config_hash(self) -> str:
         """Stable hash of everything that affects behaviour; stored on every trace."""

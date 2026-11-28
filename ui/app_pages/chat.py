@@ -19,8 +19,10 @@ from amic.chatui import (
     decision_summary,
     find_trace,
     list_ollama_models,
+    plain,
     save_name_to_profile,
 )
+from amic.writepath.commands import parse_command
 
 ROUTE_COLOR = {"SKIP": "gray", "SHALLOW": "blue", "DEEP": "violet"}
 EXAMPLES = [
@@ -44,7 +46,7 @@ def sign_out() -> None:
 with st.sidebar:
     st.header("Account")
     if user:
-        st.success(f"Signed in as **{user[1]}**", icon=":material/account_circle:")
+        st.success(f"Signed in as **{plain(user[1])}**", icon=":material/account_circle:")
         st.caption("Your turns and learner profile are saved to your own memory.")
     elif mode == "seeded":
         st.info(f"Seeded learner **{seeded_id}**", icon=":material/science:")
@@ -120,7 +122,7 @@ collection = users_collection() if user else "edu_v1"
 write = True if user else write  # accounts always save; guests never do
 
 # ----------------------------------------------------------------------------------- main
-st.title(f"Hi, {user[1]}" if user else "AMIC chat")
+st.title(f"Hi, {plain(user[1])}" if user else "AMIC chat")
 st.caption(
     "Any LLM answers; AMIC decides whether it gets the learner's memory "
     "(SKIP / SHALLOW / DEEP) before each turn."
@@ -182,6 +184,28 @@ msgs = st.session_state.messages
 cols = st.columns(len(EXAMPLES))
 clicked = next((q for c, q in zip(cols, EXAMPLES, strict=True) if c.button(q)), None)
 query = st.chat_input("Ask the tutor...") or clicked
+if query is not None and not query.strip():
+    st.toast("Type a message first.", icon=":material/edit:")  # a blank turn is not sent or saved
+    query = None
+query = query.strip() if query else query
+can_save = write and mode != "guest"
+
+if query and parse_command(query) and not can_save:
+    # /remember and /forget only act on saved memory: say so instead of promising and not saving
+    msgs.append({"role": "user", "content": query})
+    msgs.append(
+        {
+            "role": "assistant",
+            "content": (
+                "Guests cannot save memory, so `/remember` and `/forget` do nothing here. "
+                "Go back to the login page and create an account to use them."
+                if mode == "guest"
+                else "Memory commands need saving to be on: turn on "
+                "**Save new turns to long-term memory** in the sidebar first."
+            ),
+        }
+    )
+    st.rerun()
 
 if query:
     from amic.app import make_context
@@ -193,10 +217,14 @@ if query:
         with st.status(f":shimmer[{model} is thinking]", type="compact") as status:
             ctx = make_context(comps, learner, f"ui-{st.session_state.sid}-{learner}", query, arm)  # type: ignore[arg-type]
             try:
-                resp, job = arms[arm].answer_deferred(ctx, write=write and mode != "guest")
+                resp, job = arms[arm].answer_deferred(ctx, write=can_save)
             except Exception as e:  # noqa: BLE001
                 status.update(label="Failed", state="error")
                 st.error(f"The tutor call failed: {e}")
+                # keep the exchange visible (an error reply) instead of a dangling question
+                msgs.append(
+                    {"role": "assistant", "content": f"The tutor call failed: {plain(str(e))}"}
+                )
                 st.stop()
             job()  # shadow baseline for the dashboard; writes memory only when allowed above
             status.update(label="Answered", state="complete")
