@@ -7,7 +7,14 @@ does not depend on which model answers; it only decides what memory goes into th
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import re
+import secrets
+import sqlite3
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from amic.contracts.models import AgentResponse, DecisionTrace
@@ -135,3 +142,73 @@ def decision_summary(resp: AgentResponse, tr: DecisionTrace | None) -> dict[str,
             "completion_tokens": tr.completion_tokens,
         }
     return out
+
+
+# ------------------------------------------------------------------------------------ accounts
+MIN_PIN = 4
+USERS_COLLECTION = "amic_users"  # Chroma collection for registered users (never the frozen edu_v1)
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:20] or "user"
+
+
+def _hash_pin(pin: str, salt: bytes) -> bytes:
+    return hashlib.scrypt(pin.encode(), salt=salt, n=2**14, r=8, p=1)
+
+
+class UserRegistry:
+    """Name + PIN accounts for the chat UI. A name is unique (case-insensitive); the PIN is stored
+    only as a salted scrypt hash. No recovery: a forgotten PIN means a new account."""
+
+    def __init__(self, path: str = "data/chat_users.sqlite") -> None:
+        if path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(path, check_same_thread=False)
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY,"
+            " display_name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE,"
+            " pin_salt BLOB NOT NULL, pin_hash BLOB NOT NULL, created REAL NOT NULL)"
+        )
+        self._db.commit()
+
+    def register(self, name: str, pin: str) -> str:
+        """Create an account and return its learner id. Raises ValueError with a user-facing
+        message for an empty name, a short PIN or a name that is taken."""
+        name = " ".join(name.split())
+        if not name:
+            raise ValueError("Enter a name.")
+        if len(pin) < MIN_PIN:
+            raise ValueError(f"The PIN needs at least {MIN_PIN} characters.")
+        salt = secrets.token_bytes(16)
+        uid = f"u-{_slug(name)}-{secrets.token_hex(3)}"
+        try:
+            with self._db:
+                self._db.execute(
+                    "INSERT INTO users VALUES (?,?,?,?,?,?)",
+                    (uid, name, name.casefold(), salt, _hash_pin(pin, salt), time.time()),
+                )
+        except sqlite3.IntegrityError:
+            raise ValueError("That name is taken. Sign in, or pick another name.") from None
+        return uid
+
+    def login(self, name: str, pin: str) -> tuple[str, str] | None:
+        """(learner id, display name) when name and PIN match, else None."""
+        row = self._db.execute(
+            "SELECT user_id, display_name, pin_salt, pin_hash FROM users WHERE name_key = ?",
+            (" ".join(name.split()).casefold(),),
+        ).fetchone()
+        salt = row[2] if row else bytes(16)  # same work either way: no timing hint on the name
+        ok = hmac.compare_digest(_hash_pin(pin, salt), row[3] if row else bytes(64))
+        return (row[0], row[1]) if row and ok else None
+
+
+def save_name_to_profile(profiles: Any, user_id: str, name: str) -> None:
+    """Create the learner's M3 profile with their name, so it exists before the first turn."""
+    from amic.memory.stores.profile import LearnerProfile
+
+    prof = profiles.get_or_new(user_id)
+    if not isinstance(prof, LearnerProfile):  # pragma: no cover
+        raise TypeError("profile store returned an unexpected object")
+    prof.notes.setdefault("personal", {})["name"] = f"Name is {name}"
+    profiles.put(prof)

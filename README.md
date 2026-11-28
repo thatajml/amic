@@ -228,8 +228,16 @@ OpenRouter, Groq, LM Studio/vLLM or a custom URL), a learner (a seeded one, or a
 memory), the arm (`amic` / `always` / `never`) and λ. Every answer shows the route, which tier
 decided, p against the threshold band, the rationale, the strongest signals, the retrieved memory,
 the latency split and tokens; the sidebar keeps session totals. API keys are read from `.env` or
-pasted for the session only, never stored. Long-term memory is read-only unless you turn writes on,
-so chatting cannot change the seeded memory the experiments use.
+pasted for the session only, never stored.
+
+**Accounts.** Create an account with a name and a PIN (4+ characters) and sign in again later with
+the same pair. Every turn is saved to your own long-term memory and your M3 learner profile (your
+name, goals, concepts you struggle with) is created at sign-up, so the tutor remembers you across
+sessions. Accounts live in `data/chat_users.sqlite` (PIN stored only as a salted scrypt hash; there
+is no recovery, a forgotten PIN means a new account). Account memory goes to its own Chroma
+collection `amic_users`, never to the seeded `edu_v1`. **Guest** keeps nothing. **Seeded learner**
+(`edu-*`) is read-only unless you turn writes on, so chatting cannot change the memory the
+experiments use. While the model answers, the chat shows a shimmering "thinking" indicator.
 
 ## Reproducing the results
 

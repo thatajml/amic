@@ -20,10 +20,13 @@ from amic.chatui import (
     OLLAMA,
     PRESETS,
     PROVIDERS,
+    USERS_COLLECTION,
+    UserRegistry,
     decision_summary,
     find_trace,
     list_ollama_models,
     make_gateway,
+    save_name_to_profile,
 )
 
 st.set_page_config(page_title="AMIC chat", layout="wide")
@@ -34,7 +37,7 @@ EXAMPLES = [
     "What did I get wrong last time?",
     "Can you give me an exercise that fits my project?",
 ]
-NEW_LEARNER = "New learner (no memory)"
+SIGN_IN, CREATE, GUEST, SEEDED = "Sign in", "Create account", "Guest", "Seeded learner"
 
 
 @st.cache_resource(show_spinner="Loading the embedding model...")
@@ -80,9 +83,14 @@ def get_stack(
     return comps, arms, tel
 
 
+@st.cache_resource
+def get_registry() -> UserRegistry:
+    return UserRegistry()
+
+
 def learner_options() -> dict[str, str]:
     """Label -> learner id. Seeded learners come from data/edu/learners.jsonl if present."""
-    opts = {NEW_LEARNER: ""}
+    opts: dict[str, str] = {}
     if Path("data/edu/learners.jsonl").exists():
         from amic.eval.datasets import edu
 
@@ -137,24 +145,79 @@ with st.sidebar:
     st.caption(f"τ* = {1 / (1 + lam):.2f}")
 
     st.header("Learner")
+    user = st.session_state.get("user")  # (learner id, display name) once signed in
     opts = learner_options()
-    label = st.selectbox("Who is chatting", list(opts))
-    write = st.toggle(
-        "Save new turns to long-term memory",
-        value=False,
-        help="Off keeps the seeded memory unchanged (safe for experiments).",
-    )
+    write = False
+    label = ""
+    if user:
+        mode = "user"
+        st.success(f"Signed in as **{user[1]}**", icon=":material/account_circle:")
+        st.caption("Your turns and profile are saved to your own memory.")
+        if st.button("Sign out", icon=":material/logout:"):
+            del st.session_state["user"]
+            st.rerun()
+    else:
+        mode = (
+            st.segmented_control(
+                "Who is chatting",
+                [SIGN_IN, CREATE, GUEST, *([SEEDED] if opts else [])],
+                default=SIGN_IN,
+                label_visibility="collapsed",
+            )
+            or GUEST
+        )
+        if mode in (SIGN_IN, CREATE):
+            with st.form(f"auth_{mode}"):
+                name = st.text_input("Name", max_chars=40)
+                pin = st.text_input("PIN", type="password", help="At least 4 characters.")
+                if st.form_submit_button(mode, width="stretch"):
+                    try:
+                        if mode == CREATE:
+                            uid = get_registry().register(name, pin)
+                            dn = " ".join(name.split())
+                            profiles = get_stack(
+                                provider,
+                                model,
+                                base_url,
+                                key_env,
+                                api_key,
+                                4.0,
+                                0.0,
+                                USERS_COLLECTION,
+                            )[0].profiles
+                            save_name_to_profile(profiles, uid, dn)
+                            st.session_state.user = (uid, dn)
+                        elif found := get_registry().login(name, pin):
+                            st.session_state.user = found
+                        else:
+                            st.error("Name or PIN is not right.")
+                        if "user" in st.session_state:
+                            st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
+        elif mode == SEEDED:
+            label = st.selectbox("Seeded learner", list(opts))
+            write = st.toggle(
+                "Save new turns to long-term memory",
+                value=False,
+                help="Off keeps the seeded memory unchanged (safe for experiments).",
+            )
+        else:
+            st.caption("A guest has no memory and nothing is saved.")
 
 # a fresh conversation whenever the learner changes
-if st.session_state.get("learner_label") != label:
-    st.session_state.learner_label = label
+who = user[0] if user else (opts.get(label, "") if mode == SEEDED else "")
+if st.session_state.get("who") != (mode, who):
+    st.session_state.who = (mode, who)
     st.session_state.messages = []
     st.session_state.sid = uuid.uuid4().hex[:8]
-    st.session_state.newcomer = f"ui-new-{uuid.uuid4().hex[:6]}"
-learner = opts[label] or st.session_state.newcomer
+    st.session_state.newcomer = f"ui-guest-{uuid.uuid4().hex[:6]}"
+learner = who or st.session_state.newcomer
+collection = USERS_COLLECTION if user else "edu_v1"
+write = True if user else write  # accounts always save; guests never do
 
 # ----------------------------------------------------------------------------------- main
-st.title("AMIC chat")
+st.title(f"Hi, {user[1]}" if user else "AMIC chat")
 st.caption(
     "Any LLM answers; AMIC decides whether it gets the learner's memory "
     "(SKIP / SHALLOW / DEEP) before each turn."
@@ -162,7 +225,7 @@ st.caption(
 
 try:
     comps, arms, tel = get_stack(
-        provider, model, base_url, key_env, api_key, lam, temperature, "edu_v1"
+        provider, model, base_url, key_env, api_key, lam, temperature, collection
     )
 except Exception as e:  # noqa: BLE001
     st.error(f"Could not start the tutor model: {e}")
@@ -216,15 +279,18 @@ if query:
     msgs.append({"role": "user", "content": query})
     with st.chat_message("user"):
         st.markdown(query)
-    with st.chat_message("assistant"), st.spinner(f"{model} is thinking..."):
-        ctx = make_context(comps, learner, f"ui-{st.session_state.sid}-{learner}", query, arm)  # type: ignore[arg-type]
-        try:
-            resp, job = arms[arm].answer_deferred(ctx)
-        except Exception as e:  # noqa: BLE001
-            st.error(f"The tutor call failed: {e}")
-            st.stop()
-        if write and opts[label]:  # never write for throwaway newcomers
-            job()
+    with st.chat_message("assistant"):
+        with st.status(f":shimmer[{model} is thinking]", type="compact") as status:
+            ctx = make_context(comps, learner, f"ui-{st.session_state.sid}-{learner}", query, arm)  # type: ignore[arg-type]
+            try:
+                resp, job = arms[arm].answer_deferred(ctx)
+            except Exception as e:  # noqa: BLE001
+                status.update(label="Failed", state="error")
+                st.error(f"The tutor call failed: {e}")
+                st.stop()
+            if write and (user or mode == SEEDED):  # guests are never written
+                job()
+            status.update(label="Answered", state="complete")
         sm = decision_summary(resp, find_trace(tel.traces, resp))
         st.markdown(resp.answer)
         show_panel(sm)
