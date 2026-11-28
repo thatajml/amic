@@ -85,7 +85,14 @@ with tab_f:
     show_closed = st.toggle("Show closed facts (history)", value=False)
     facts = pd.DataFrame(con.facts(tenant, include_closed=show_closed))
     if facts.empty:
-        st.info("No facts.")
+        if int(row.episodes):
+            st.info(
+                "No facts yet. They are extracted by the worker after each substantive turn "
+                "(needs `AMIC_WRITEPATH__EXTRACT_FACTS=true`, the default in Docker). For turns "
+                "saved earlier run `python -m amic.writepath.backfill`."
+            )
+        else:
+            st.info("No facts.")
     else:
         st.dataframe(facts.drop(columns=["id"]), hide_index=True, width="stretch")
         current = facts[facts.current]

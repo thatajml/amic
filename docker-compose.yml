@@ -105,14 +105,20 @@ services:
       AMIC_CHROMA_CLIENT: embedded
       AMIC_WRITEPATH__QUEUE: inline
 
-  # Consolidation worker (L7): turns queued WriteIntents into M1 records, M3 profile updates
-  # and, with AMIC_WRITEPATH__EXTRACT_FACTS=true in .env, LLM-extracted M2 facts (host Ollama).
+  # Consolidation worker (L7): turns queued WriteIntents into M1 records, M3 profile updates and
+  # LLM-extracted M2 facts (one background call to the host Ollama per substantive turn; they
+  # fill the Educator Console's Facts tab and the M3 profile, the tutor still retrieves M1 only).
+  # Set AMIC_WRITEPATH__EXTRACT_FACTS=false in .env to turn extraction off. Learners who chatted
+  # before it was on: docker compose run --rm worker python -m amic.writepath.backfill
   # /remember and /forget are applied here too. Stopped: answers still work, and memory catches
   # up from the Redis stream once it is back.
   worker:
     <<: *app
     command: ["python", "-m", "amic.writepath.worker"]
     restart: unless-stopped
+    environment:
+      <<: *env
+      AMIC_WRITEPATH__EXTRACT_FACTS: ${AMIC_WRITEPATH__EXTRACT_FACTS:-true}
 
   # Educator Console (L1): what is remembered about a learner, the gate's decisions, and the
   # data-rights actions (close a fact, add a note, correct mastery, erase). Bound to localhost

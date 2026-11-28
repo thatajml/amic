@@ -157,7 +157,7 @@ docker compose up -d --build         :: rebuild after changing code
 | Service | What it is |
 |---|---|
 | `api` | `POST /chat`, `GET`/`DELETE /learners/{id}`, `/traces` on http://localhost:8080 (docs at `/docs`) |
-| `worker` | Consolidation worker: stores each answered turn in M1, updates the M3 profile, applies `/remember` and `/forget`. Set `AMIC_WRITEPATH__EXTRACT_FACTS=true` in `.env` to also extract M2 facts with the host's Ollama |
+| `worker` | Consolidation worker: stores each answered turn in M1, updates the M3 profile, applies `/remember` and `/forget`. M2 facts are extracted with the host's Ollama (one background call per substantive turn; `AMIC_WRITEPATH__EXTRACT_FACTS=false` in `.env` turns it off). They fill the Educator Console's Facts tab and the M3 profile; the tutor still retrieves M1 only. For turns saved before extraction was on: `docker compose run --rm worker python -m amic.writepath.backfill` |
 | `educator` | Educator Console on http://localhost:8502: a learner's memory and gate decisions, plus close-fact, add-note, correct-mastery and erase |
 | `jobs` | Nightly jobs, once at start and then every 24 h: Tier-1 retrain with a promotion gate, band recalibration, forgetting. Results go to `data/jobs.jsonl` |
 | `dashboard` | Usage and savings dashboard on http://localhost:8501 |

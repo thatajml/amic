@@ -36,6 +36,7 @@ from amic.writepath.queue import WriteIntentQueue
 class WorkerStats:
     processed: int = 0
     extracted: int = 0
+    extract_failed: int = 0  # extraction raised (Ollama timeout/error): the turn is still stored
     facts: dict[str, int] = field(
         default_factory=lambda: {"insert": 0, "update": 0, "refresh": 0, "skip": 0}
     )
@@ -114,8 +115,14 @@ class ConsolidationWorker:
             and self.resolver is not None
             and is_salient(it.query, it.answer, self.min_words)
         ):
-            facts = self.extractor.extract([(it.query, it.answer)], it.ts)
-            self.stats.extracted += 1
+            try:
+                facts = self.extractor.extract([(it.query, it.answer)], it.ts)
+            except Exception as e:  # noqa: BLE001 - a slow/broken extractor must not lose the turn
+                self.stats.extract_failed += 1
+                print(f"[worker] fact extraction failed for {it.record_id}: {e}", file=sys.stderr)
+                facts = []
+            else:
+                self.stats.extracted += 1
             counts = self.resolver.resolve(it.tenant_id, facts, it.ts, source=it.record_id)
             for k, v in counts.items():
                 self.stats.facts[k] += v
@@ -227,6 +234,13 @@ class ConsolidationWorker:
                 except Exception as e:  # noqa: BLE001 - leave unacked: it will be re-delivered
                     self.stats.failed += 1
                     print(f"[worker] {intent.record_id} failed: {e}", file=sys.stderr, flush=True)
+            if msgs and not once:  # visible in `docker compose logs worker`
+                st = self.stats
+                print(
+                    f"[worker] processed={st.processed} extracted={st.extracted} "
+                    f"extract_failed={st.extract_failed} facts={st.facts} failed={st.failed}",
+                    flush=True,
+                )
 
 
 def build_worker(comps: Any) -> ConsolidationWorker:
@@ -278,7 +292,10 @@ def main() -> None:
         f"[worker] queue={s.writepath.queue} extract_facts={s.writepath.extract_facts}", flush=True
     )
     st = w.run(queue, once=a.once)
-    print(f"[worker] processed={st.processed} facts={st.facts} failed={st.failed}")
+    print(
+        f"[worker] processed={st.processed} extracted={st.extracted} "
+        f"extract_failed={st.extract_failed} facts={st.facts} failed={st.failed}"
+    )
 
 
 if __name__ == "__main__":
